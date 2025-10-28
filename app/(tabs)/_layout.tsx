@@ -1,33 +1,57 @@
+// app/(tabs)/_layout.tsx
 import { Tabs } from 'expo-router';
+import {
+  Briefcase,
+  Heart,
+  Home,
+  MessageCircle,
+  User,
+} from 'lucide-react-native';
 import React from 'react';
 
-import { HapticTab } from '@/components/haptic-tab';
-import { IconSymbol } from '@/components/ui/icon-symbol';
-import { Colors } from '@/constants/theme';
-import { useColorScheme } from '@/hooks/use-color-scheme';
-
 export default function TabLayout() {
-  const colorScheme = useColorScheme();
-
   return (
-    <Tabs
-      screenOptions={{
-        tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
-        headerShown: false,
-        tabBarButton: HapticTab,
-      }}>
+    <Tabs screenOptions={{ tabBarActiveTintColor: '#111827' }}>
       <Tabs.Screen
         name="index"
         options={{
           title: 'Home',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="house.fill" color={color} />,
+          tabBarIcon: ({ color }) => <Home color={color} />,
+          headerShown: false,
+        }}
+      />
+      {/* Explore tab removed */}
+      <Tabs.Screen
+        name="wishlist"
+        options={{
+          title: 'Wishlist',
+          tabBarIcon: ({ color }) => <Heart color={color} />,
+          // Keep default header (or set headerShown: false if needed on wishlist main page)
+          // headerShown: false,
         }}
       />
       <Tabs.Screen
-        name="explore"
+        name="mytrips"
         options={{
-          title: 'Explore',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="paperplane.fill" color={color} />,
+          title: 'My Trips',
+          tabBarIcon: ({ color }) => <Briefcase color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="inbox"
+        options={{
+          title: 'Inbox',
+          tabBarIcon: ({ color }) => <MessageCircle color={color} />,
+          headerShown: false, // Inbox has its own custom header
+        }}
+      />
+      <Tabs.Screen
+        name="profile"
+        options={{
+          title: 'Profile',
+          tabBarIcon: ({ color }) => <User color={color} />,
+          // Add this line to hide the default tab header when navigating *away*
+          headerShown: false,
         }}
       />
     </Tabs>
