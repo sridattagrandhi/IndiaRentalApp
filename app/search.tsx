@@ -1,31 +1,34 @@
 // app/search.tsx
 import { ThemedView } from '@/components/themed-view';
 import Slider from '@react-native-community/slider';
+import { format, parseISO } from 'date-fns';
 import Constants from 'expo-constants';
 import { Image } from 'expo-image';
 import { Link, Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import {
-  ArrowLeft, Calendar as CalendarIcon, Check, ChevronDown, List, Map, MapPin, Minus, Plus, // Added Minus, Plus
+  ArrowLeft, Calendar as CalendarIcon, Check, ChevronDown, List, Map, MapPin, Minus, Plus,
   SlidersHorizontal, Star, Users, X
 } from 'lucide-react-native';
-import React, { Dispatch, SetStateAction, useEffect, useState } from 'react';
+import React, { Dispatch, SetStateAction, useEffect, useRef, useState } from 'react'; // ⬅️ added useRef
 import {
   Alert, Dimensions,
+  FlatList,
   Keyboard,
   LayoutChangeEvent,
   Modal, SafeAreaView, ScrollView,
   StyleSheet, Text, TextInput, TouchableOpacity,
   TouchableWithoutFeedback, View
 } from 'react-native';
-// Use FlatList from react-native for the main list view
-import { FlatList } from 'react-native';
-// Use GestureFlatList from gesture-handler for the bottom sheet list
-import { format, parseISO } from 'date-fns'; // For date formatting
-import { CalendarList, DateData } from 'react-native-calendars'; // Import CalendarList
+import { CalendarList, DateData } from 'react-native-calendars';
 import { Gesture, GestureDetector, FlatList as GestureFlatList } from 'react-native-gesture-handler';
 import MapView, { Marker, PROVIDER_DEFAULT, Region } from 'react-native-maps';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+// ⬇️⬇️ NEW: locate-me imports
+import * as Location from 'expo-location';
+import { LocateFixed } from 'lucide-react-native';
+// ⬆️⬆️
 
 // ---- Height constants ----
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -56,349 +59,337 @@ const sortOptions = ['Best match', 'Lowest price', 'Highest rated', 'Closest'];
 
 // --- Components ---
 const PropertyCard = ({ property }: { property: Property }) => (
-    <View style={styles.card}>
-      <Image source={{ uri: property.image }} style={styles.cardImage}
-        placeholder={{ blurhash: 'L0A,l#~q00D%~qD%00%M00?b-;%M' }} transition={300} />
-      {property.instantBook && (
-        <View style={styles.instantBadge}><Text style={styles.instantBadgeText}>Instant</Text></View>
-      )}
-      <View style={styles.cardDetails}>
-        <View style={styles.cardRow}>
-          <Text style={styles.cardName} numberOfLines={1}>{property.name}</Text>
-          <View style={styles.cardRating}>
-            <Star size={14} color="#F59E0B" fill="#F59E0B" />
-            <Text style={styles.cardRatingText}>{property.rating}</Text>
-          </View>
-        </View>
-        <View style={[styles.cardRow, { marginTop: 4 }]}>
-          <MapPin size={12} color="#6B7280" />
-          <Text style={styles.cardLocation} numberOfLines={1}>
-            {property.location} • {property.distance}
-          </Text>
-        </View>
-        <View style={styles.cardFeatures}>
-          {property.features.slice(0, 3).map((feature) => (
-            <View key={feature} style={styles.cardFeatureTag}>
-              <Text style={styles.cardFeatureText}>{feature}</Text>
-            </View>
-          ))}
-        </View>
-        <View style={[styles.cardRow, { marginTop: 'auto' }]}>
-          <Text style={styles.cardPrice}>
-            ₹{property.price.toLocaleString('en-IN')}
-            <Text style={styles.cardPriceNight}>/night</Text>
-          </Text>
-          <Link href="/listing-details" asChild>
-            <TouchableOpacity style={styles.cardViewButton}>
-              <Text style={styles.cardViewButtonText}>View</Text>
-            </TouchableOpacity>
-          </Link>
+  <View style={styles.card}>
+    <Image source={{ uri: property.image }} style={styles.cardImage}
+      placeholder={{ blurhash: 'L0A,l#~q00D%~qD%00%M00?b-;%M' }} transition={300} />
+    {property.instantBook && (
+      <View style={styles.instantBadge}><Text style={styles.instantBadgeText}>Instant</Text></View>
+    )}
+    <View style={styles.cardDetails}>
+      <View style={styles.cardRow}>
+        <Text style={styles.cardName} numberOfLines={1}>{property.name}</Text>
+        <View style={styles.cardRating}>
+          <Star size={14} color="#F59E0B" fill="#F59E0B" />
+          <Text style={styles.cardRatingText}>{property.rating}</Text>
         </View>
       </View>
+      <View style={[styles.cardRow, { marginTop: 4 }]}>
+        <MapPin size={12} color="#6B7280" />
+        <Text style={styles.cardLocation} numberOfLines={1}>
+          {property.location} • {property.distance}
+        </Text>
+      </View>
+      <View style={styles.cardFeatures}>
+        {property.features.slice(0, 3).map((feature) => (
+          <View key={feature} style={styles.cardFeatureTag}>
+            <Text style={styles.cardFeatureText}>{feature}</Text>
+          </View>
+        ))}
+      </View>
+      <View style={[styles.cardRow, { marginTop: 'auto' }]}>
+        <Text style={styles.cardPrice}>
+          ₹{property.price.toLocaleString('en-IN')}
+          <Text style={styles.cardPriceNight}>/night</Text>
+        </Text>
+        <Link href="/listing-details" asChild>
+          <TouchableOpacity style={styles.cardViewButton}>
+            <Text style={styles.cardViewButtonText}>View</Text>
+          </TouchableOpacity>
+        </Link>
+      </View>
     </View>
+  </View>
 );
 
 interface CustomCheckboxProps { label: string; value: boolean; onValueChange: (v: boolean) => void; }
 const CustomCheckbox = ({ label, value, onValueChange }: CustomCheckboxProps) => (
-    <TouchableOpacity style={styles.checkRow} onPress={() => onValueChange(!value)}>
-      <View style={[styles.checkbox, value && styles.checkboxChecked]}>
-        {value && <Check size={12} color="#FFFFFF" />}
-      </View>
-      <Text style={styles.checkLabel}>{label}</Text>
-    </TouchableOpacity>
+  <TouchableOpacity style={styles.checkRow} onPress={() => onValueChange(!value)}>
+    <View style={[styles.checkbox, value && styles.checkboxChecked]}>
+      {value && <Check size={12} color="#FFFFFF" />}
+    </View>
+    <Text style={styles.checkLabel}>{label}</Text>
+  </TouchableOpacity>
 );
 
 interface CustomRadioProps { label: string; value: boolean; onValueChange: () => void; showStar?: boolean; }
 const CustomRadio = ({ label, value, onValueChange, showStar = false }: CustomRadioProps) => (
-    <TouchableOpacity style={styles.checkRow} onPress={onValueChange}>
-      <View style={[styles.radio, value && styles.radioChecked]}>
-        {value && <View style={styles.radioCheckedInner} />}
-      </View>
-      <Text style={styles.checkLabel}>{label}</Text>
-      {showStar && (<><Star size={14} color="#F59E0B" fill="#F59E0B" style={{ marginLeft: 4 }} /><Text style={styles.checkLabel}> & up</Text></>)}
-    </TouchableOpacity>
+  <TouchableOpacity style={styles.checkRow} onPress={onValueChange}>
+    <View style={[styles.radio, value && styles.radioChecked]}>
+      {value && <View style={styles.radioCheckedInner} />}
+    </View>
+    <Text style={styles.checkLabel}>{label}</Text>
+    {showStar && (<><Star size={14} color="#F59E0B" fill="#F59E0B" style={{ marginLeft: 4 }} /><Text style={styles.checkLabel}> & up</Text></>)}
+  </TouchableOpacity>
 );
 
 interface FilterPanelProps {
-    isVisible: boolean; onClose: () => void; applyFilters: () => void; clearFilters: () => void;
-    filteredCount: number; priceRange: number[]; setPriceRange: Dispatch<SetStateAction<number[]>>;
-    propertyTypes: string[]; setPropertyTypes: Dispatch<SetStateAction<string[]>>;
-    amenities: string[]; setAmenities: Dispatch<SetStateAction<string[]>>;
-    minRating: string; setMinRating: Dispatch<SetStateAction<string>>;
-    instantBookOnly: boolean; setInstantBookOnly: Dispatch<SetStateAction<boolean>>;
-    radiusKm: number;
-    setRadiusKm: Dispatch<SetStateAction<number>>;
+  isVisible: boolean; onClose: () => void; applyFilters: () => void; clearFilters: () => void;
+  filteredCount: number; priceRange: number[]; setPriceRange: Dispatch<SetStateAction<number[]>>;
+  propertyTypes: string[]; setPropertyTypes: Dispatch<SetStateAction<string[]>>;
+  amenities: string[]; setAmenities: Dispatch<SetStateAction<string[]>>;
+  minRating: string; setMinRating: Dispatch<SetStateAction<string>>;
+  instantBookOnly: boolean; setInstantBookOnly: Dispatch<SetStateAction<boolean>>;
+  radiusKm: number; setRadiusKm: Dispatch<SetStateAction<number>>;
 }
 function FilterPanel(props: FilterPanelProps) {
-    const {
-        isVisible, onClose, applyFilters, clearFilters, filteredCount,
-        priceRange, setPriceRange, propertyTypes, setPropertyTypes,
-        amenities, setAmenities, minRating, setMinRating,
-        instantBookOnly, setInstantBookOnly,
-        radiusKm, setRadiusKm
-      } = props;
+  const {
+    isVisible, onClose, applyFilters, clearFilters, filteredCount,
+    priceRange, setPriceRange, propertyTypes, setPropertyTypes,
+    amenities, setAmenities, minRating, setMinRating,
+    instantBookOnly, setInstantBookOnly, radiusKm, setRadiusKm
+  } = props;
 
-      const togglePropertyType = (type: string) =>
-        setPropertyTypes(prev => prev.includes(type) ? prev.filter(t => t !== type) : [...prev, type]);
+  const togglePropertyType = (type: string) =>
+    setPropertyTypes(prev => prev.includes(type) ? prev.filter(t => t !== type) : [...prev, type]);
 
-      const toggleAmenity = (amenity: string) =>
-        setAmenities(prev => prev.includes(amenity) ? prev.filter(a => a !== amenity) : [...prev, amenity]);
+  const toggleAmenity = (amenity: string) =>
+    setAmenities(prev => prev.includes(amenity) ? prev.filter(a => a !== amenity) : [...prev, amenity]);
 
-      return (
-        <Modal visible={isVisible} animationType="slide" transparent={false} onRequestClose={onClose}>
-          <SafeAreaView style={styles.modalContainer}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Filters</Text>
-              <TouchableOpacity onPress={onClose} style={styles.modalCloseButton}><X size={24} color="#111827" /></TouchableOpacity>
+  return (
+    <Modal visible={isVisible} animationType="slide" transparent={false} onRequestClose={onClose}>
+      <SafeAreaView style={styles.modalContainer}>
+        <View style={styles.modalHeader}>
+          <Text style={styles.modalTitle}>Filters</Text>
+          <TouchableOpacity onPress={onClose} style={styles.modalCloseButton}><X size={24} color="#111827" /></TouchableOpacity>
+        </View>
+        <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modalScrollContent}>
+          <View style={styles.filterSection}>
+            <Text style={styles.filterTitle}>Price Range (per night)</Text>
+            <Slider
+              style={styles.slider}
+              value={priceRange[0]}
+              onValueChange={v => setPriceRange([Math.round(v), priceRange[1]])}
+              minimumValue={0} maximumValue={10000} step={100}
+              minimumTrackTintColor="#111827" maximumTrackTintColor="#E5E7EB" thumbTintColor="#111827"
+            />
+            <View style={styles.priceRangeLabels}>
+              <Text style={styles.priceLabel}>₹{priceRange[0]}</Text>
+              <Text style={styles.priceLabel}>₹10000+</Text>
             </View>
-            <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modalScrollContent}>
-              <View style={styles.filterSection}>
-                <Text style={styles.filterTitle}>Price Range (per night)</Text>
-                <Slider
-                  style={styles.slider}
-                  value={priceRange[0]}
-                  onValueChange={v => setPriceRange([Math.round(v), priceRange[1]])}
-                  minimumValue={0} maximumValue={10000} step={100}
-                  minimumTrackTintColor="#111827" maximumTrackTintColor="#E5E7EB" thumbTintColor="#111827"
-                />
-                <View style={styles.priceRangeLabels}>
-                  <Text style={styles.priceLabel}>₹{priceRange[0]}</Text>
-                  <Text style={styles.priceLabel}>₹10000+</Text>
-                </View>
-              </View>
-              <View style={styles.filterSection}>
-                <Text style={styles.filterTitle}>Search Radius</Text>
-                <Slider
-                  style={styles.slider}
-                  value={radiusKm}
-                  onValueChange={value => setRadiusKm(Math.round(value))} // Update state on change
-                  minimumValue={1}  // Min radius 1km
-                  maximumValue={50} // Max radius 50km
-                  step={1}         // Step by 1km
-                  minimumTrackTintColor="#111827"
-                  maximumTrackTintColor="#E5E7EB"
-                  thumbTintColor="#111827"
-                />
-                <View style={styles.radiusLabelContainer}>
-                  <Text style={styles.radiusLabelText}>Within {radiusKm} km</Text>
-                </View>
-              </View>
+          </View>
 
-              <View style={styles.filterSection}>
-                <Text style={styles.filterTitle}>Property Type</Text>
-                {['Room', 'Home', 'Hotel'].map(type => (
-                  <CustomCheckbox key={type} label={type}
-                    value={propertyTypes.includes(type.toLowerCase())}
-                    onValueChange={() => togglePropertyType(type.toLowerCase())} />
-                ))}
-              </View>
-
-              <View style={styles.filterSection}>
-                <Text style={styles.filterTitle}>Amenities</Text>
-                {['AC', 'Parking', 'WiFi', 'Late Check-in', 'Pool', 'Breakfast'].map(a => (
-                  <CustomCheckbox key={a} label={a}
-                    value={amenities.includes(a)} onValueChange={() => toggleAmenity(a)} />
-                ))}
-              </View>
-
-              <View style={styles.filterSection}>
-                <Text style={styles.filterTitle}>Minimum Rating</Text>
-                <CustomRadio label="Any" value={minRating === '0'} onValueChange={() => setMinRating('0')} />
-                <CustomRadio label="3.5" value={minRating === '3.5'} onValueChange={() => setMinRating('3.5')} showStar />
-                <CustomRadio label="4.0" value={minRating === '4.0'} onValueChange={() => setMinRating('4.0')} showStar />
-                <CustomRadio label="4.5" value={minRating === '4.5'} onValueChange={() => setMinRating('4.5')} showStar />
-              </View>
-
-              <View style={styles.filterSection}>
-                <CustomCheckbox label="Instant Book only" value={instantBookOnly} onValueChange={setInstantBookOnly} />
-              </View>
-            </ScrollView>
-
-            <View style={styles.modalFooter}>
-              <TouchableOpacity style={styles.clearButton} onPress={clearFilters}><Text style={styles.clearButtonText}>Clear all</Text></TouchableOpacity>
-              <TouchableOpacity style={styles.showButton} onPress={applyFilters}><Text style={styles.showButtonText}>Show {filteredCount} results</Text></TouchableOpacity>
+          <View style={styles.filterSection}>
+            <Text style={styles.filterTitle}>Search Radius</Text>
+            <Slider
+              style={styles.slider}
+              value={radiusKm}
+              onValueChange={value => setRadiusKm(Math.round(value))}
+              minimumValue={1}
+              maximumValue={50}
+              step={1}
+              minimumTrackTintColor="#111827"
+              maximumTrackTintColor="#E5E7EB"
+              thumbTintColor="#111827"
+            />
+            <View style={styles.radiusLabelContainer}>
+              <Text style={styles.radiusLabelText}>Within {radiusKm} km</Text>
             </View>
-          </SafeAreaView>
-        </Modal>
-      );
+          </View>
+
+          <View style={styles.filterSection}>
+            <Text style={styles.filterTitle}>Property Type</Text>
+            {['Room', 'Home', 'Hotel'].map(type => (
+              <CustomCheckbox key={type} label={type}
+                value={propertyTypes.includes(type.toLowerCase())}
+                onValueChange={() => togglePropertyType(type.toLowerCase())} />
+            ))}
+          </View>
+
+          <View style={styles.filterSection}>
+            <Text style={styles.filterTitle}>Amenities</Text>
+            {['AC', 'Parking', 'WiFi', 'Late Check-in', 'Pool', 'Breakfast'].map(a => (
+              <CustomCheckbox key={a} label={a}
+                value={amenities.includes(a)} onValueChange={() => toggleAmenity(a)} />
+            ))}
+          </View>
+
+          <View style={styles.filterSection}>
+            <Text style={styles.filterTitle}>Minimum Rating</Text>
+            <CustomRadio label="Any" value={minRating === '0'} onValueChange={() => setMinRating('0')} />
+            <CustomRadio label="3.5" value={minRating === '3.5'} onValueChange={() => setMinRating('3.5')} showStar />
+            <CustomRadio label="4.0" value={minRating === '4.0'} onValueChange={() => setMinRating('4.0')} showStar />
+            <CustomRadio label="4.5" value={minRating === '4.5'} onValueChange={() => setMinRating('4.5')} showStar />
+          </View>
+
+          <View style={styles.filterSection}>
+            <CustomCheckbox label="Instant Book only" value={instantBookOnly} onValueChange={setInstantBookOnly} />
+          </View>
+        </ScrollView>
+
+        <View style={styles.modalFooter}>
+          <TouchableOpacity style={styles.clearButton} onPress={clearFilters}><Text style={styles.clearButtonText}>Clear all</Text></TouchableOpacity>
+          <TouchableOpacity style={styles.showButton} onPress={applyFilters}><Text style={styles.showButtonText}>Show {filteredCount} results</Text></TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    </Modal>
+  );
 }
 
 // --- Date Picker Modal ---
 interface DatePickerModalProps {
-    isVisible: boolean;
-    onClose: () => void;
-    checkIn: string | null;
-    checkOut: string | null;
-    setCheckIn: (date: string | null) => void;
-    setCheckOut: (date: string | null) => void;
+  isVisible: boolean;
+  onClose: () => void;
+  checkIn: string | null;
+  checkOut: string | null;
+  setCheckIn: (date: string | null) => void;
+  setCheckOut: (date: string | null) => void;
 }
 function DatePickerModal({ isVisible, onClose, checkIn, checkOut, setCheckIn, setCheckOut }: DatePickerModalProps) {
-    const [selectedStartDate, setSelectedStartDate] = useState<string | null>(checkIn);
-    const [selectedEndDate, setSelectedEndDate] = useState<string | null>(checkOut);
-    const [selectingPhase, setSelectingPhase] = useState<'start' | 'end'>(checkIn ? 'end' : 'start');
+  const [selectedStartDate, setSelectedStartDate] = useState<string | null>(checkIn);
+  const [selectedEndDate, setSelectedEndDate] = useState<string | null>(checkOut);
+  const [selectingPhase, setSelectingPhase] = useState<'start' | 'end'>(checkIn ? 'end' : 'start');
 
-    useEffect(() => {
-        setSelectedStartDate(checkIn);
-        setSelectedEndDate(checkOut);
-        setSelectingPhase(checkIn ? 'end' : 'start');
-    }, [isVisible, checkIn, checkOut]);
+  useEffect(() => {
+    setSelectedStartDate(checkIn);
+    setSelectedEndDate(checkOut);
+    setSelectingPhase(checkIn ? 'end' : 'start');
+  }, [isVisible, checkIn, checkOut]);
 
-    const handleDayPress = (day: DateData) => {
-        if (selectingPhase === 'start' || (selectedStartDate && selectedEndDate && day.dateString < selectedStartDate!)) {
-            setSelectedStartDate(day.dateString);
-            setSelectedEndDate(null);
-            setSelectingPhase('end');
-        } else if (selectedStartDate && day.dateString >= selectedStartDate!) {
-            setSelectedEndDate(day.dateString);
-            setSelectingPhase('start');
-        } else if (!selectedStartDate) {
-             setSelectedStartDate(day.dateString);
-             setSelectedEndDate(null);
-             setSelectingPhase('end');
-        }
-    };
-
-    const handleConfirm = () => {
-        setCheckIn(selectedStartDate);
-        setCheckOut(selectedEndDate);
-        onClose();
-    };
-
-    // --- Corrected Marked Dates Logic ---
-    const markedDates: { [date: string]: any } = {};
-    if (selectedStartDate) {
-        markedDates[selectedStartDate] = { startingDay: true, color: '#111827', textColor: 'white' };
+  const handleDayPress = (day: DateData) => {
+    if (selectingPhase === 'start' || (selectedStartDate && selectedEndDate && day.dateString < selectedStartDate!)) {
+      setSelectedStartDate(day.dateString);
+      setSelectedEndDate(null);
+      setSelectingPhase('end');
+    } else if (selectedStartDate && day.dateString >= selectedStartDate!) {
+      setSelectedEndDate(day.dateString);
+      setSelectingPhase('start');
+    } else if (!selectedStartDate) {
+      setSelectedStartDate(day.dateString);
+      setSelectedEndDate(null);
+      setSelectingPhase('end');
     }
-    if (selectedEndDate) {
-        markedDates[selectedEndDate] = { endingDay: true, color: '#111827', textColor: 'white' };
-        if (selectedStartDate && selectedStartDate !== selectedEndDate) {
-            let currentDate = new Date(parseISO(selectedStartDate));
-            const endDate = new Date(parseISO(selectedEndDate));
-            currentDate.setDate(currentDate.getDate() + 1);
+  };
 
-            while (currentDate < endDate) {
-                const dateString = currentDate.toISOString().split('T')[0];
-                markedDates[dateString] = { color: '#F3F4F6', textColor: '#111827' }; // Middle color
-                currentDate.setDate(currentDate.getDate() + 1);
-            }
-             // Re-apply start/end colors if they were overwritten by middle loop
-            markedDates[selectedStartDate] = { ...markedDates[selectedStartDate], color: '#111827', textColor: 'white' };
-            markedDates[selectedEndDate] = { ...markedDates[selectedEndDate], color: '#111827', textColor: 'white' };
+  const handleConfirm = () => {
+    setCheckIn(selectedStartDate);
+    setCheckOut(selectedEndDate);
+    onClose();
+  };
 
-        } else if (selectedStartDate === selectedEndDate) {
-             // Single day selection needs both properties
-             markedDates[selectedStartDate] = { startingDay: true, endingDay: true, color: '#111827', textColor: 'white' };
-        }
+  const markedDates: { [date: string]: any } = {};
+  if (selectedStartDate) {
+    markedDates[selectedStartDate] = { startingDay: true, color: '#111827', textColor: 'white' };
+  }
+  if (selectedEndDate) {
+    markedDates[selectedEndDate] = { endingDay: true, color: '#111827', textColor: 'white' };
+    if (selectedStartDate && selectedStartDate !== selectedEndDate) {
+      let currentDate = new Date(parseISO(selectedStartDate));
+      const endDate = new Date(parseISO(selectedEndDate));
+      currentDate.setDate(currentDate.getDate() + 1);
+
+      while (currentDate < endDate) {
+        const dateString = currentDate.toISOString().split('T')[0];
+        markedDates[dateString] = { color: '#F3F4F6', textColor: '#111827' };
+        currentDate.setDate(currentDate.getDate() + 1);
+      }
+      markedDates[selectedStartDate] = { ...markedDates[selectedStartDate], color: '#111827', textColor: 'white' };
+      markedDates[selectedEndDate] = { ...markedDates[selectedEndDate], color: '#111827', textColor: 'white' };
+    } else if (selectedStartDate === selectedEndDate) {
+      markedDates[selectedStartDate] = { startingDay: true, endingDay: true, color: '#111827', textColor: 'white' };
     }
+  }
 
+  return (
+    <Modal visible={isVisible} animationType="slide" transparent={false} onRequestClose={onClose}>
+      <SafeAreaView style={styles.modalContainer}>
+        <View style={styles.modalHeader}>
+          <Text style={styles.modalTitle}>Select Dates</Text>
+          <TouchableOpacity onPress={onClose} style={styles.modalCloseButton}><X size={24} color="#111827" /></TouchableOpacity>
+        </View>
 
-    return (
-        <Modal visible={isVisible} animationType="slide" transparent={false} onRequestClose={onClose}>
-            <SafeAreaView style={styles.modalContainer}>
-                {/* 1. HEADER (Stays the same) */}
-                <View style={styles.modalHeader}>
-                    <Text style={styles.modalTitle}>Select Dates</Text>
-                    <TouchableOpacity onPress={onClose} style={styles.modalCloseButton}><X size={24} color="#111827" /></TouchableOpacity>
-                </View>
+        <View style={{ flex: 1 }}>
+          <CalendarList
+            current={selectedStartDate || new Date().toISOString().split('T')[0]}
+            minDate={new Date().toISOString().split('T')[0]}
+            onDayPress={handleDayPress}
+            markingType={'period'}
+            markedDates={markedDates}
+            pastScrollRange={0}
+            futureScrollRange={12}
+            scrollEnabled={true}
+            showScrollIndicator={true}
+            theme={{
+              backgroundColor: '#FFFFFF',
+              calendarBackground: '#FFFFFF',
+              textSectionTitleColor: '#111827',
+              selectedDayBackgroundColor: '#111827',
+              selectedDayTextColor: '#FFFFFF',
+              todayTextColor: '#DC2626',
+              dayTextColor: '#111827',
+              textDisabledColor: '#D1D5DB',
+              dotColor: '#111827',
+              selectedDotColor: '#FFFFFF',
+              arrowColor: '#111827',
+              disabledArrowColor: '#d9e1e8',
+              monthTextColor: '#111827',
+              indicatorColor: '#111827',
+              textDayFontWeight: '400',
+              textMonthFontWeight: 'bold',
+              textDayHeaderFontWeight: '500',
+              textDayFontSize: 16,
+              textMonthFontSize: 18,
+              textDayHeaderFontSize: 13,
+            }}
+          />
+        </View>
 
-                {/* 2. WRAPPER FOR CALENDAR */}
-                {/* This View is the new, flexible part */}
-                <View style={{ flex: 1 }}> 
-                    <CalendarList
-                        // style={{ flex: 1 }} <-- REMOVED FROM HERE
-                        current={selectedStartDate || new Date().toISOString().split('T')[0]}
-                        minDate={new Date().toISOString().split('T')[0]}
-                        onDayPress={handleDayPress}
-                        markingType={'period'}
-                        markedDates={markedDates}
-                        pastScrollRange={0}
-                        futureScrollRange={12}
-                        scrollEnabled={true}
-                        showScrollIndicator={true}
-                        theme={{
-                            backgroundColor: '#FFFFFF',
-                            calendarBackground: '#FFFFFF',
-                            textSectionTitleColor: '#111827',
-                            selectedDayBackgroundColor: '#111827',
-                            selectedDayTextColor: '#FFFFFF',
-                            todayTextColor: '#DC2626',
-                            dayTextColor: '#111827',
-                            textDisabledColor: '#D1D5DB',
-                            dotColor: '#111827',
-                            selectedDotColor: '#FFFFFF',
-                            arrowColor: '#111827',
-                            disabledArrowColor: '#d9e1e8',
-                            monthTextColor: '#111827',
-                            indicatorColor: '#111827',
-                            textDayFontWeight: '400',
-                            textMonthFontWeight: 'bold',
-                            textDayHeaderFontWeight: '500',
-                            textDayFontSize: 16,
-                            textMonthFontSize: 18,
-                            textDayHeaderFontSize: 13,
-                        }}
-                    />
-                </View>
-
-                {/* 3. FOOTER (Stays the same, pinned to bottom) */}
-                <View style={styles.modalFooter}>
-                    <TouchableOpacity style={styles.clearButton} onPress={() => { setSelectedStartDate(null); setSelectedEndDate(null); setSelectingPhase('start'); }}>
-                        <Text style={styles.clearButtonText}>Clear</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        style={[styles.showButton, (!selectedStartDate || !selectedEndDate) && styles.disabledButton]}
-                        onPress={handleConfirm}
-                        disabled={!selectedStartDate || !selectedEndDate} // Button disabled until range is selected
-                    >
-                        <Text style={styles.showButtonText}>Confirm Dates</Text>
-                    </TouchableOpacity>
-                </View>
-            </SafeAreaView>
-        </Modal>
-    );
+        <View style={styles.modalFooter}>
+          <TouchableOpacity style={styles.clearButton} onPress={() => { setSelectedStartDate(null); setSelectedEndDate(null); setSelectingPhase('start'); }}>
+            <Text style={styles.clearButtonText}>Clear</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.showButton, (!selectedStartDate || !selectedEndDate) && styles.disabledButton]}
+            onPress={handleConfirm}
+            disabled={!selectedStartDate || !selectedEndDate}
+          >
+            <Text style={styles.showButtonText}>Confirm Dates</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    </Modal>
+  );
 }
 
 // --- Guest Picker Modal ---
 interface GuestPickerModalProps {
-    isVisible: boolean;
-    onClose: () => void;
-    guests: number;
-    setGuests: (count: number) => void;
+  isVisible: boolean;
+  onClose: () => void;
+  guests: number;
+  setGuests: (count: number) => void;
 }
 function GuestPickerModal({ isVisible, onClose, guests, setGuests }: GuestPickerModalProps) {
-    const increment = () => setGuests(Math.min(guests + 1, 20));
-    const decrement = () => setGuests(Math.max(guests - 1, 1));
+  const increment = () => setGuests(Math.min(guests + 1, 20));
+  const decrement = () => setGuests(Math.max(guests - 1, 1));
 
-    return (
-        <Modal visible={isVisible} animationType="fade" transparent={true} onRequestClose={onClose}>
-            <TouchableWithoutFeedback onPress={onClose}>
-                <View style={styles.guestModalOverlay}>
-                    <TouchableWithoutFeedback>
-                         <View style={styles.guestModalContent}>
-                            <Text style={styles.guestModalTitle}>Select Guests</Text>
-                            <View style={styles.guestControlRow}>
-                                <Text style={styles.guestLabel}>Guests</Text>
-                                <View style={styles.guestButtons}>
-                                    <TouchableOpacity onPress={decrement} style={[styles.guestButton, guests <= 1 && styles.disabledGuestButton]} disabled={guests <= 1}>
-                                        <Minus size={20} color={guests <= 1 ? "#9CA3AF" : "#111827"} />
-                                    </TouchableOpacity>
-                                    <Text style={styles.guestCount}>{guests}</Text>
-                                    <TouchableOpacity onPress={increment} style={[styles.guestButton, guests >= 20 && styles.disabledGuestButton]} disabled={guests >= 20}>
-                                        <Plus size={20} color={guests >= 20 ? "#9CA3AF" : "#111827"} />
-                                    </TouchableOpacity>
-                                </View>
-                            </View>
-                             <TouchableOpacity style={styles.confirmGuestButton} onPress={onClose}>
-                                 <Text style={styles.confirmGuestButtonText}>Confirm</Text>
-                             </TouchableOpacity>
-                         </View>
-                    </TouchableWithoutFeedback>
+  return (
+    <Modal visible={isVisible} animationType="fade" transparent={true} onRequestClose={onClose}>
+      <TouchableWithoutFeedback onPress={onClose}>
+        <View style={styles.guestModalOverlay}>
+          <TouchableWithoutFeedback>
+            <View style={styles.guestModalContent}>
+              <Text style={styles.guestModalTitle}>Select Guests</Text>
+              <View style={styles.guestControlRow}>
+                <Text style={styles.guestLabel}>Guests</Text>
+                <View style={styles.guestButtons}>
+                  <TouchableOpacity onPress={decrement} style={[styles.guestButton, guests <= 1 && styles.disabledGuestButton]} disabled={guests <= 1}>
+                    <Minus size={20} color={guests <= 1 ? "#9CA3AF" : "#111827"} />
+                  </TouchableOpacity>
+                  <Text style={styles.guestCount}>{guests}</Text>
+                  <TouchableOpacity onPress={increment} style={[styles.guestButton, guests >= 20 && styles.disabledGuestButton]} disabled={guests >= 20}>
+                    <Plus size={20} color={guests >= 20 ? "#9CA3AF" : "#111827"} />
+                  </TouchableOpacity>
                 </View>
-            </TouchableWithoutFeedback>
-        </Modal>
-    );
+              </View>
+              <TouchableOpacity style={styles.confirmGuestButton} onPress={onClose}>
+                <Text style={styles.confirmGuestButtonText}>Confirm</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableWithoutFeedback>
+        </View>
+      </TouchableWithoutFeedback>
+    </Modal>
+  );
 }
-
 
 // --- Main Page ---
 export default function SearchPage() {
@@ -440,29 +431,29 @@ export default function SearchPage() {
   const INITIAL_TRANSLATE_Y = -BOTTOM_SHEET_MIN_HEIGHT;
 
   const clampHeightsFromLayout = (containerHeight: number) => {
-      const allowedMax = Math.max(
-          BOTTOM_SHEET_MIN_HEIGHT,
-          Math.min(containerHeight - MAP_MIN_VISIBLE_PX, SCREEN_HEIGHT * 0.9)
-      );
-      const finalMax = Math.max(allowedMax, BOTTOM_SHEET_MIN_HEIGHT + 1);
-      setMaxSheetHeight(finalMax);
-      maxSheetHeightSV.value = finalMax;
+    const allowedMax = Math.max(
+      BOTTOM_SHEET_MIN_HEIGHT,
+      Math.min(containerHeight - MAP_MIN_VISIBLE_PX, SCREEN_HEIGHT * 0.9)
+    );
+    const finalMax = Math.max(allowedMax, BOTTOM_SHEET_MIN_HEIGHT + 1);
+    setMaxSheetHeight(finalMax);
+    maxSheetHeightSV.value = finalMax;
   };
 
   const onContentLayout = (event: LayoutChangeEvent) => {
-      const { height } = event.nativeEvent.layout;
-      contentContainerHeight.value = height;
-      clampHeightsFromLayout(height);
+    const { height } = event.nativeEvent.layout;
+    contentContainerHeight.value = height;
+    clampHeightsFromLayout(height);
   };
 
   const gesture = Gesture.Pan()
     .onStart(() => { context.value = { y: translateY.value }; })
     .onUpdate((event) => {
-        translateY.value = event.translationY + context.value.y;
-        const currentMaxHeight = maxSheetHeightSV.value;
-        translateY.value = Math.max(translateY.value, -(currentMaxHeight - BOTTOM_SHEET_MIN_HEIGHT));
-        translateY.value = Math.min(translateY.value, 0);
-  });
+      translateY.value = event.translationY + context.value.y;
+      const currentMaxHeight = maxSheetHeightSV.value;
+      translateY.value = Math.max(translateY.value, -(currentMaxHeight - BOTTOM_SHEET_MIN_HEIGHT));
+      translateY.value = Math.min(translateY.value, 0);
+    });
 
   const animatedBottomSheetStyle = useAnimatedStyle(() => ({
     transform: [{ translateY: translateY.value }],
@@ -473,27 +464,25 @@ export default function SearchPage() {
   useEffect(() => { translateY.value = withSpring(0, { damping: 15 }); }, []);
 
   useEffect(() => {
-    // ... (fetchLocationName remains the same)
     const fetchLocationName = async (latitude: number, longitude: number) => {
-        if (!GEOAPIFY_API_KEY) { Alert.alert("API Key Error", "Geoapify API key is missing."); return; }
-        try {
-          const resp = await fetch(`https://api.geoapify.com/v1/geocode/reverse?lat=${latitude}&lon=${longitude}&apiKey=${GEOAPIFY_API_KEY}`);
-          const j = await resp.json();
-          const name = j?.features?.[0]?.properties?.city || 'Current Location';
-          setSearchLocationInput(name);
-          setSearchLocationDisplay(name);
-          setRegion({ latitude, longitude, latitudeDelta: 0.1, longitudeDelta: 0.1 });
-        } catch (e) {
-          console.error("Failed to reverse geocode", e);
-          setSearchLocationInput('Current Location');
-          setSearchLocationDisplay('Current Location');
-        }
-      };
-      if (lat && lon) fetchLocationName(parseFloat(lat), parseFloat(lon));
+      if (!GEOAPIFY_API_KEY) { Alert.alert("API Key Error", "Geoapify API key is missing."); return; }
+      try {
+        const resp = await fetch(`https://api.geoapify.com/v1/geocode/reverse?lat=${latitude}&lon=${longitude}&apiKey=${GEOAPIFY_API_KEY}`);
+        const j = await resp.json();
+        const name = j?.features?.[0]?.properties?.city || 'Current Location';
+        setSearchLocationInput(name);
+        setSearchLocationDisplay(name);
+        setRegion({ latitude, longitude, latitudeDelta: 0.1, longitudeDelta: 0.1 });
+      } catch (e) {
+        console.error("Failed to reverse geocode", e);
+        setSearchLocationInput('Current Location');
+        setSearchLocationDisplay('Current Location');
+      }
+    };
+    if (lat && lon) fetchLocationName(parseFloat(lat), parseFloat(lon));
   }, [lat, lon]);
 
   const handleLocationSearch = async () => {
-    // ... (handleLocationSearch remains the same)
     Keyboard.dismiss();
     const query = searchLocationInput.trim();
     if (!query) return;
@@ -501,14 +490,14 @@ export default function SearchPage() {
     if (!GEOAPIFY_API_KEY) { Alert.alert("API Key Error", "Geoapify API key is missing."); return; }
     try {
       let biasParam = '';
-      if (region) { // Bias search towards current map view
+      if (region) {
         biasParam = `&bias=proximity:${region.longitude},${region.latitude}`;
       }
       const url = `${GEOAPIFY_GEOCODE_URL}&text=${encodeURIComponent(query)}${biasParam}`;
       const response = await fetch(url);
 
       if (!response.ok) throw new Error(`API Error: ${response.status}`);
-      
+
       const data = await response.json();
 
       if (data.features && data.features.length > 0) {
@@ -517,9 +506,9 @@ export default function SearchPage() {
         const properties = firstResult.properties;
         const displayName = properties.formatted || query;
 
-        setSearchLocationDisplay(displayName); 
-        
-        let delta = 0.1; 
+        setSearchLocationDisplay(displayName);
+
+        let delta = 0.1;
         if (properties.result_type === 'city') delta = 0.5;
         else if (properties.result_type === 'state') delta = 2.0;
         else if (properties.result_type === 'country') delta = 15.0;
@@ -533,7 +522,6 @@ export default function SearchPage() {
       Alert.alert("Search Error", `Could not perform search. ${error.message || ''}`);
     }
   };
-
 
   const applyFilters = () => { setFilteredProperties(mockProperties); setFilterModalVisible(false); };
   const clearFilters = () => { setFilteredProperties(mockProperties); };
@@ -556,124 +544,159 @@ export default function SearchPage() {
 
   const displayDates = () => {
     if (checkInDate && checkOutDate) {
-        // Use parseISO because dates are stored as ISO strings
-        return `${format(parseISO(checkInDate), 'MMM dd')} - ${format(parseISO(checkOutDate), 'MMM dd')}`;
-      }
-      return 'Select dates';
+      return `${format(parseISO(checkInDate), 'MMM dd')} - ${format(parseISO(checkOutDate), 'MMM dd')}`;
+    }
+    return 'Select dates';
   };
 
+  // ⬇️⬇️ NEW: locate-me refs/state + function
+  const mapRef = useRef<MapView | null>(null);
+  const [locating, setLocating] = useState(false);
+
+  const recenterToUser = async () => {
+    try {
+      setLocating(true);
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Location Permission', 'Permission to access location was denied');
+        return;
+      }
+      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const center = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
+
+      setRegion({ ...center, latitudeDelta: 0.02, longitudeDelta: 0.02 });
+      mapRef.current?.animateCamera?.({ center, zoom: 15 }, { duration: 350 });
+    } catch (e) {
+      console.error(e);
+      Alert.alert('Location Error', 'Could not get your current location.');
+    } finally {
+      setLocating(false);
+    }
+  };
+  // ⬆️⬆️
+
   return (
-    // <GestureHandlerRootView style={{ flex: 1 }}> // Only if not at root
-      <ThemedView style={[styles.container,  { paddingTop: insets.top}]}>
-        <Stack.Screen
-          options={{
-            headerShown: true, 
-            title: `Stays in ${searchLocationDisplay}`,
-            headerShadowVisible: false,
-            headerLeft: () => (
-              <TouchableOpacity onPress={() => router.back()} style={{ marginLeft: 0 }}>
-                <ArrowLeft size={24} color="#111827" />
-              </TouchableOpacity>
-            ),
-          }}
-        />
-        <View style={{ flex: 1, marginTop: -insets.top }}>
+    <ThemedView style={[styles.container, { paddingTop: insets.top }]}>
+      <Stack.Screen
+        options={{
+          headerShown: true,
+          title: `Stays in ${searchLocationDisplay}`,
+          headerShadowVisible: false,
+          headerLeft: () => (
+            <TouchableOpacity onPress={() => router.back()} style={{ marginLeft: 0 }}>
+              <ArrowLeft size={24} color="#111827" />
+            </TouchableOpacity>
+          ),
+        }}
+      />
+
+      <View style={{ flex: 1, marginTop: -insets.top }}>
         <TouchableWithoutFeedback onPress={() => { setShowSortDropdown(false); Keyboard.dismiss(); }}>
           <View style={styles.flex1}>
             {/* Search Inputs */}
             <View style={styles.searchInputsContainer}>
-               <View style={styles.inputWrapper}>
+              <View style={styles.inputWrapper}>
                 <MapPin size={18} color="#6B7280" />
                 <TextInput
-                    placeholder="Location" value={searchLocationInput} onChangeText={setSearchLocationInput}
-                    onSubmitEditing={handleLocationSearch}
-                    placeholderTextColor="#6B7280" style={styles.input} returnKeyType="search"
+                  placeholder="Location" value={searchLocationInput} onChangeText={setSearchLocationInput}
+                  onSubmitEditing={handleLocationSearch}
+                  placeholderTextColor="#6B7280" style={styles.input} returnKeyType="search"
                 />
-                </View>
-                <TouchableOpacity style={styles.inputWrapper} onPress={() => setDatePickerVisible(true)}>
-                  <CalendarIcon size={18} color="#6B7280" />
-                  <Text style={[styles.inputText, (!checkInDate || !checkOutDate) && styles.inputPlaceholderText]}>
-                      {displayDates()}
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.inputWrapper} onPress={() => setGuestPickerVisible(true)}>
-                  <Users size={18} color="#6B7280" />
-                   <Text style={styles.inputText}>
-                      {guests} Guest{guests > 1 ? 's' : ''}
-                   </Text>
-                </TouchableOpacity>
+              </View>
+              <TouchableOpacity style={styles.inputWrapper} onPress={() => setDatePickerVisible(true)}>
+                <CalendarIcon size={18} color="#6B7280" />
+                <Text style={[styles.inputText, (!checkInDate || !checkOutDate) && styles.inputPlaceholderText]}>
+                  {displayDates()}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.inputWrapper} onPress={() => setGuestPickerVisible(true)}>
+                <Users size={18} color="#6B7280" />
+                <Text style={styles.inputText}>
+                  {guests} Guest{guests > 1 ? 's' : ''}
+                </Text>
+              </TouchableOpacity>
             </View>
 
             {/* Segment Tabs */}
             <View style={styles.tabsContainer}>
-               {['Stays', 'Monthly', 'Micro-stay'].map(tab => (
-                 <TouchableOpacity key={tab}
-                   style={[styles.tab, stayType === tab && styles.tabActive]}
-                   onPress={() => setStayType(tab)}>
-                   <Text style={[styles.tabText, stayType === tab && styles.tabTextActive]}>{tab}</Text>
-                 </TouchableOpacity>
-               ))}
+              {['Stays', 'Monthly', 'Micro-stay'].map(tab => (
+                <TouchableOpacity key={tab}
+                  style={[styles.tab, stayType === tab && styles.tabActive]}
+                  onPress={() => setStayType(tab)}>
+                  <Text style={[styles.tabText, stayType === tab && styles.tabTextActive]}>{tab}</Text>
+                </TouchableOpacity>
+              ))}
             </View>
 
             {/* Filter/Sort Bar */}
             <View style={styles.filterBarContainer}>
-               <View style={styles.filterBar}>
-                 <TouchableOpacity style={styles.filterButton} onPress={() => setFilterModalVisible(true)}>
-                   <SlidersHorizontal size={16} color="#111827" /><Text style={styles.filterButtonText}>Filters</Text>
-                 </TouchableOpacity>
-                 <TouchableOpacity style={styles.sortButton} onPress={() => setShowSortDropdown(true)}>
-                   <Text style={styles.sortButtonText}>{sortBy}</Text><ChevronDown size={16} color="#6B7280" />
-                 </TouchableOpacity>
-               </View>
-               {showSortDropdown && renderSortDropdown()}
+              <View style={styles.filterBar}>
+                <TouchableOpacity style={styles.filterButton} onPress={() => setFilterModalVisible(true)}>
+                  <SlidersHorizontal size={16} color="#111827" /><Text style={styles.filterButtonText}>Filters</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.sortButton} onPress={() => setShowSortDropdown(true)}>
+                  <Text style={styles.sortButtonText}>{sortBy}</Text><ChevronDown size={16} color="#6B7280" />
+                </TouchableOpacity>
+              </View>
+              {showSortDropdown && renderSortDropdown()}
             </View>
 
             {/* Content Area */}
             <View style={styles.contentArea} onLayout={onContentLayout}>
-               {viewMode === 'list' && (
-                 <FlatList
-                   data={filteredProperties} renderItem={({ item }) => <PropertyCard property={item} />}
-                   keyExtractor={item => item.id} contentContainerStyle={styles.listContent}
-                   showsVerticalScrollIndicator={false}
-                 />
-               )}
+              {viewMode === 'list' && (
+                <FlatList
+                  data={filteredProperties} renderItem={({ item }) => <PropertyCard property={item} />}
+                  keyExtractor={item => item.id} contentContainerStyle={styles.listContent}
+                  showsVerticalScrollIndicator={false}
+                />
+              )}
 
-               {viewMode === 'map' && (
-                 <>
-                 <View style={styles.mapContainer}>
-                  <MapView
-                    style={styles.mapView}
-                    provider={PROVIDER_DEFAULT}
-                    initialRegion={region}
-                    region={region}
-                  >
-                    {filteredProperties.map(prop => (
-                      <Marker key={prop.id} coordinate={prop.coordinates}>
-                        {renderPriceMarker(prop.price)}
-                      </Marker>
-                    ))}
-                  </MapView>
-                </View>
-                   <Animated.View style={[styles.bottomSheet, animatedBottomSheetStyle]}>
-                     <GestureDetector gesture={gesture}>
-                       <View style={styles.dragHandleContainer}><View style={styles.dragHandle} /></View>
-                     </GestureDetector>
-                     <GestureFlatList
-                       data={filteredProperties}
-                       renderItem={({ item }) => <PropertyCard property={item} />}
-                       keyExtractor={item => item.id}
-                       contentContainerStyle={styles.listContentBottomSheet}
-                       style={styles.flatListInSheet}
-                       showsVerticalScrollIndicator={false}
-                     />
-                   </Animated.View>
-                 </>
-               )}
+              {viewMode === 'map' && (
+                <>
+                  <View style={styles.mapContainer}>
+                    <MapView
+                      ref={mapRef} // ⬅️ NEW
+                      style={styles.mapView}
+                      provider={PROVIDER_DEFAULT}
+                      initialRegion={region}
+                      region={region}
+                    >
+                      {filteredProperties.map(prop => (
+                        <Marker key={prop.id} coordinate={prop.coordinates}>
+                          {renderPriceMarker(prop.price)}
+                        </Marker>
+                      ))}
+                    </MapView>
+
+                    {/* ⬇️ NEW: floating Locate Me button */}
+                    <View pointerEvents="box-none" style={styles.locateControl}>
+                      <TouchableOpacity style={styles.zoomBtn} onPress={recenterToUser} disabled={locating}>
+                        <LocateFixed size={18} color="#111827" />
+                      </TouchableOpacity>
+                    </View>
+                    {/* ⬆️ NEW */}
+                  </View>
+
+                  <Animated.View style={[styles.bottomSheet, animatedBottomSheetStyle]}>
+                    <GestureDetector gesture={gesture}>
+                      <View style={styles.dragHandleContainer}><View style={styles.dragHandle} /></View>
+                    </GestureDetector>
+                    <GestureFlatList
+                      data={filteredProperties}
+                      renderItem={({ item }) => <PropertyCard property={item} />}
+                      keyExtractor={item => item.id}
+                      contentContainerStyle={styles.listContentBottomSheet}
+                      style={styles.flatListInSheet}
+                      showsVerticalScrollIndicator={false}
+                    />
+                  </Animated.View>
+                </>
+              )}
             </View>
 
             {/* Map/List Toggle */}
             <TouchableOpacity style={styles.mapToggleButton} onPress={() => setViewMode(prev => (prev === 'list' ? 'map' : 'list'))}>
-               {viewMode === 'list' ? <Map size={22} color="white" /> : <List size={22} color="white" />}
+              {viewMode === 'list' ? <Map size={22} color="white" /> : <List size={22} color="white" />}
             </TouchableOpacity>
 
             {/* Filter Modal */}
@@ -686,37 +709,33 @@ export default function SearchPage() {
               amenities={amenities} setAmenities={setAmenities}
               minRating={minRating} setMinRating={setMinRating}
               instantBookOnly={instantBookOnly} setInstantBookOnly={setInstantBookOnly}
-              radiusKm={radiusKm}
-              setRadiusKm={setRadiusKm}
+              radiusKm={radiusKm} setRadiusKm={setRadiusKm}
             />
 
             {/* Date & Guest Modals */}
             <DatePickerModal
-                isVisible={isDatePickerVisible}
-                onClose={() => setDatePickerVisible(false)}
-                checkIn={checkInDate}
-                checkOut={checkOutDate}
-                setCheckIn={setCheckInDate}
-                setCheckOut={setCheckOutDate}
+              isVisible={isDatePickerVisible}
+              onClose={() => setDatePickerVisible(false)}
+              checkIn={checkInDate}
+              checkOut={checkOutDate}
+              setCheckIn={setCheckInDate}
+              setCheckOut={setCheckOutDate}
             />
-             <GuestPickerModal
-                isVisible={isGuestPickerVisible}
-                onClose={() => setGuestPickerVisible(false)}
-                guests={guests}
-                setGuests={setGuests}
+            <GuestPickerModal
+              isVisible={isGuestPickerVisible}
+              onClose={() => setGuestPickerVisible(false)}
+              guests={guests}
+              setGuests={setGuests}
             />
-
           </View>
         </TouchableWithoutFeedback>
-        </View>
-      </ThemedView>
-    // </GestureHandlerRootView>
+      </View>
+    </ThemedView>
   );
 }
 
 // --- Styles ---
 const styles = StyleSheet.create({
-  // ... (Keep ALL existing styles)
   flex1: { flex: 1 },
   container: { flex: 1, backgroundColor: '#FFFFFF' },
   searchInputsContainer: {
@@ -834,44 +853,50 @@ const styles = StyleSheet.create({
   radio: { width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: '#B0B0B0', justifyContent: 'center', alignItems: 'center' },
   radioChecked: { borderColor: '#111827' },
   radioCheckedInner: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#111827' },
-  modalFooter: {
-    flexDirection: 'row', padding: 16, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#E5E7EB',
-  },
+  modalFooter: { flexDirection: 'row', padding: 16, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#E5E7EB' },
   clearButton: { flex: 1, padding: 14, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F3F4F6', marginRight: 8 },
   clearButtonText: { fontSize: 16, fontWeight: '600', color: '#111827' },
   showButton: { flex: 2, padding: 14, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: '#111827', marginLeft: 8 },
   showButtonText: { fontSize: 16, fontWeight: '600', color: 'white' },
   disabledButton: { backgroundColor: '#D1D5DB' },
-  // Guest Picker Modal Styles
-  guestModalOverlay: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.4)', justifyContent: 'center', alignItems: 'center', },
-  guestModalContent: { backgroundColor: 'white', borderRadius: 16, padding: 24, width: '85%', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4, elevation: 5, },
-  guestModalTitle: { fontSize: 18, fontWeight: '600', marginBottom: 20, textAlign: 'center', },
-  guestControlRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24, },
-  guestLabel: { fontSize: 16, color: '#374151', },
-  guestButtons: { flexDirection: 'row', alignItems: 'center', },
-  guestButton: { width: 36, height: 36, borderRadius: 18, borderWidth: 1, borderColor: '#D1D5DB', justifyContent: 'center', alignItems: 'center', marginHorizontal: 8, },
-  disabledGuestButton: { borderColor: '#E5E7EB', },
-  guestCount: { fontSize: 18, fontWeight: '600', minWidth: 30, textAlign: 'center', },
-  confirmGuestButton: { backgroundColor: '#111827', paddingVertical: 14, borderRadius: 12, alignItems: 'center', },
-  confirmGuestButtonText: { color: 'white', fontSize: 16, fontWeight: '600', },
-  radiusLabelContainer: {
-        alignItems: 'center',
-        marginTop: 8,
-    },
-    radiusLabelText: {
-        fontSize: 16,
-        color: '#111827',
-        fontWeight: '500',
-    },
-  mapContainer: {
-    flex: 1 // Fixed height in pixels - adjust this value as needed
-  },
-  
-  mapView: {
-    width: '100%',
-    height: '100%',
-  },
-  
-  // REMOVE the absolute positioning from contentArea or ensure it's set correctly:
-});
+  guestModalOverlay: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.4)', justifyContent: 'center', alignItems: 'center' },
+  guestModalContent: { backgroundColor: 'white', borderRadius: 16, padding: 24, width: '85%', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4, elevation: 5 },
+  guestModalTitle: { fontSize: 18, fontWeight: '600', marginBottom: 20, textAlign: 'center' },
+  guestControlRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 },
+  guestLabel: { fontSize: 16, color: '#374151' },
+  guestButtons: { flexDirection: 'row', alignItems: 'center' },
+  guestButton: { width: 36, height: 36, borderRadius: 18, borderWidth: 1, borderColor: '#D1D5DB', justifyContent: 'center', alignItems: 'center', marginHorizontal: 8 },
+  disabledGuestButton: { borderColor: '#E5E7EB' },
+  guestCount: { fontSize: 18, fontWeight: '600', minWidth: 30, textAlign: 'center' },
+  confirmGuestButton: { backgroundColor: '#111827', paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
+  confirmGuestButtonText: { color: 'white', fontSize: 16, fontWeight: '600' },
+  radiusLabelContainer: { alignItems: 'center', marginTop: 8 },
+  radiusLabelText: { fontSize: 16, color: '#111827', fontWeight: '500' },
+  mapContainer: { flex: 1 },
+  mapView: { width: '100%', height: '100%' },
 
+  // ⬇️⬇️ NEW: styles for locate button (reuses your zoomBtn style)
+  locateControl: {
+    position: 'absolute',
+    right: 12,
+    top: 12, // adjust if the bottom sheet overlaps
+    zIndex: 10,
+    alignItems: 'center',
+  },
+  zoomBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowOffset: { width: 0, height: 1 },
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  // ⬆️⬆️
+});

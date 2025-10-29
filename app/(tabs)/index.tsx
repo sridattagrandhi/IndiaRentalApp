@@ -2,7 +2,7 @@
 import { ThemedView } from '@/components/themed-view';
 import Constants from 'expo-constants';
 import { Image } from 'expo-image';
-import { List, Map, MapPin, Navigation, Search, Star } from 'lucide-react-native';
+import { List, LocateFixed, Map, MapPin, Navigation, Search, Star } from 'lucide-react-native'; // ⬅️ added LocateFixed
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Alert,
@@ -78,7 +78,6 @@ const mockProperties: Property[] = [
     coordinates: [-122.4731, 37.7801],
   },
 ];
-
 
 const quickFilters = ['Tonight', 'Weekend', '₹ Budget', 'Family', 'Parking'];
 const popularAreas = ['San Francisco', 'Oakland', 'San Jose', 'Napa', 'Sacramento'];
@@ -209,6 +208,29 @@ export default function HomePage() {
     router.push('/search');
   };
 
+  // ⬇️ NEW: recenter-to-user for the home map
+  const recenterToUser = async () => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Location Permission', 'Permission to access location was denied');
+        return;
+      }
+      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const center = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
+      // Update state for label/logic
+      const newRegion: Region = { ...center, latitudeDelta: 0.02, longitudeDelta: 0.02 };
+      setCurrentRegion(newRegion);
+
+      // Smooth camera move
+      mapViewRef.current?.animateCamera?.({ center, zoom: 15 }, { duration: 350 });
+    } catch (e) {
+      console.error(e);
+      Alert.alert('Location Error', 'Could not get your current location.');
+    }
+  };
+  // ⬆️
+
   if (!initialRegion) {
     return (<View style={styles.loadingContainer}><Text>Finding your location...</Text></View>);
   }
@@ -297,6 +319,18 @@ export default function HomePage() {
           >
             {viewMode === 'map' ? <List size={20} color="white" /> : <Map size={20} color="white" />}
           </TouchableOpacity>
+
+          {/* ⬇️ NEW: Locate-me button directly under the toggle */}
+          {viewMode === 'map' && (
+            <TouchableOpacity
+              style={styles.locateButton}
+              onPress={recenterToUser}
+              activeOpacity={0.85}
+            >
+              <LocateFixed size={18} color="white" />
+            </TouchableOpacity>
+          )}
+          {/* ⬆️ */}
         </View>
       </SafeAreaView>
 
@@ -368,10 +402,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#F6F7F9',
     justifyContent: 'center', // Added for TouchableOpacity
   },
-  searchInputPlaceholder: {
-    fontSize: 16,
-    color: '#9AA0A6',
-  },
+  searchInputPlaceholder: { fontSize: 16, color: '#9AA0A6' },
   searchIconWrap: {
     position: 'absolute',
     left: ICON_LEFT,
@@ -384,7 +415,6 @@ const styles = StyleSheet.create({
     zIndex: 3,
   },
 
-  // (The rest of your styles for filters, map, cards, footer, etc. remain unchanged)
   // Quick filters
   filtersContainer: { flexDirection: 'row', gap: 8, paddingVertical: 6 },
   filterButton: {
@@ -405,19 +435,19 @@ const styles = StyleSheet.create({
   // Price tag marker
   priceTagWrap: { alignItems: 'center' },
   priceTag: {
-    backgroundColor: 'white',
+    backgroundColor: 'black',
     paddingVertical: 6,
     paddingHorizontal: 10,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#E5E7EB',
+    borderColor: 'black',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.25,
     shadowRadius: 2,
     elevation: 3,
   },
-  priceTagText: { color: '#111827', fontSize: 13, fontWeight: '700' },
+  priceTagText: { color: 'white', fontSize: 13, fontWeight: '700' },
   priceTagTail: {
     marginTop: -2,
     width: 10,
@@ -440,6 +470,25 @@ const styles = StyleSheet.create({
     height: 48,
     backgroundColor: '#0E1320',
     borderRadius: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 5,
+    zIndex: 10,
+  },
+
+  // NEW: Locate-me button (directly under the toggle)
+  locateButton: {
+    position: 'absolute',
+    top: 20 + 48 + 12, // under the toggle (toggle top + toggle height + gap)
+    right: 20,
+    width: 44,
+    height: 44,
+    backgroundColor: '#0E1320',
+    borderRadius: 22,
     justifyContent: 'center',
     alignItems: 'center',
     shadowColor: '#000',
@@ -500,4 +549,3 @@ const styles = StyleSheet.create({
   popularAreaButton: { backgroundColor: '#F1F2F5', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999 },
   popularAreaText: { fontSize: 14, color: '#374151' },
 });
-

@@ -33,7 +33,8 @@ export default function TabLayout() {
       <Tabs.Screen
         name="mytrips"
         options={{
-          title: 'My Trips',
+          title: 'My Bookings',
+          tabBarLabel: 'My Bookings',
           tabBarIcon: ({ color }) => <Briefcase color={color} />,
         }}
       />

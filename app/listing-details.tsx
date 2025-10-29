@@ -1,51 +1,73 @@
 // app/listing-details.tsx
 import { ThemedView } from '@/components/themed-view';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { format, parseISO } from 'date-fns';
 import { Image } from 'expo-image';
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import {
-    ArrowLeft,
-    BadgeCheck,
-    Calendar as CalendarIcon,
-    CheckCircle2,
-    ChevronLeft,
-    ChevronRight,
-    Clock,
-    Coffee,
-    Globe,
-    Heart,
-    MapPin,
-    MessageSquare,
-    Minus,
-    ParkingCircle,
-    Plus,
-    Share2,
-    Shield,
-    Star,
-    Tv,
-    Utensils,
-    Wifi,
-    Wind,
-    X,
+  ArrowLeft,
+  BadgeCheck,
+  Calendar as CalendarIcon,
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  Coffee,
+  Globe,
+  Heart,
+  MapPin,
+  MessageSquare,
+  Minus,
+  ParkingCircle,
+  Plus,
+  Share2,
+  Shield,
+  Star,
+  Tv,
+  Utensils,
+  Wifi,
+  Wind,
+  X,
 } from 'lucide-react-native';
 import React, { useEffect, useRef, useState } from 'react';
 import {
-    Alert,
-    Dimensions,
-    FlatList,
-    Modal,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View
+  Alert,
+  Dimensions,
+  FlatList,
+  Modal,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { CalendarList, DateData } from 'react-native-calendars';
 import MapView, { Marker, PROVIDER_DEFAULT, Region } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const WISHLISTS_KEY = '@wishlists';
+const SAVED_PROPERTIES_KEY = '@saved_properties';
+
+// ⬇️ ADDED: types + tiny storage helpers
+type Wishlist = { id: string; name: string; description?: string; count: number; coverImage?: string };
+type SavedProperty = {
+  id: string;
+  name: string;
+  location: string;
+  price: number;
+  rating: number;
+  image: string;
+  listId: string;
+  coordinates?: { latitude: number; longitude: number };
+};
+async function getData<T>(key: string, fallback: T): Promise<T> {
+  try { const raw = await AsyncStorage.getItem(key); return raw ? JSON.parse(raw) as T : fallback; }
+  catch { return fallback; }
+}
+async function setData<T>(key: string, value: T) { await AsyncStorage.setItem(key, JSON.stringify(value)); }
 
 // ----- Mock data (same as before) -----
 const listing = {
@@ -268,6 +290,23 @@ export default function ListingDetailsPage() {
   const [guests, setGuests] = useState(2);
   const [isDatePickerVisible, setDatePickerVisible] = useState(false);
 
+  // ⬇️ ADDED: wishlist picker state
+  const [wishlists, setWishlists] = useState<Wishlist[]>([]);
+  const [pickerVisible, setPickerVisible] = useState(false);
+  const [creatingNew, setCreatingNew] = useState(false);
+  const [newListName, setNewListName] = useState('');
+  const [newListDesc, setNewListDesc] = useState('');
+
+  // ⬇️ ADDED: load lists + check if saved anywhere
+  useEffect(() => {
+    (async () => {
+      const lists = await getData<Wishlist[]>(WISHLISTS_KEY, []);
+      const saved = await getData<SavedProperty[]>(SAVED_PROPERTIES_KEY, []);
+      setWishlists(lists);
+      setIsFavorite(saved.some(p => p.id === listing.id));
+    })();
+  }, []);
+
   const mapRegion: Region = {
     latitude: listing.coordinates.latitude,
     longitude: listing.coordinates.longitude,
@@ -291,7 +330,53 @@ export default function ListingDetailsPage() {
     if (checkInDate && checkOutDate)
       return `${format(parseISO(checkInDate), 'MMM dd')} - ${format(parseISO(checkOutDate), 'MMM dd')}`;
     return 'Select dates';
+  };
+
+  // ⬇️ ADDED: save helpers
+  async function saveToWishlist(targetListId: string) {
+    const saved = await getData<SavedProperty[]>(SAVED_PROPERTIES_KEY, []);
+    const already = saved.some(p => p.id === listing.id && p.listId === targetListId);
+    if (already) { Alert.alert('Already saved', 'This place is already in that list.'); return; }
+
+    const toSave: SavedProperty = {
+      id: listing.id,
+      name: listing.name,
+      location: listing.locality,
+      price: listing.price,
+      rating: listing.rating,
+      image: listing.images[0] ?? '',
+      listId: targetListId,
+      coordinates: listing.coordinates,
     };
+    const updatedSaved = [...saved, toSave];
+    await setData(SAVED_PROPERTIES_KEY, updatedSaved);
+
+    const lists = await getData<Wishlist[]>(WISHLISTS_KEY, []);
+    const updatedLists = lists.map(l =>
+      l.id === targetListId
+        ? { ...l, count: (l.count ?? 0) + 1, coverImage: l.coverImage || toSave.image || l.coverImage }
+        : l
+    );
+    await setData(WISHLISTS_KEY, updatedLists);
+    setWishlists(updatedLists);
+
+    setIsFavorite(true);
+    setPickerVisible(false);
+    const listName = updatedLists.find(l => l.id === targetListId)?.name;
+    Alert.alert('Saved', `Added to “${listName}”.`);
+  }
+
+  async function createListAndSave() {
+    const name = newListName.trim();
+    if (!name) { Alert.alert('Name required', 'Please enter a list name.'); return; }
+    const lists = await getData<Wishlist[]>(WISHLISTS_KEY, []);
+    const newList: Wishlist = { id: Date.now().toString(), name, description: newListDesc.trim(), count: 0 };
+    const updated = [...lists, newList];
+    await setData(WISHLISTS_KEY, updated);
+    setWishlists(updated);
+    setCreatingNew(false); setNewListName(''); setNewListDesc('');
+    await saveToWishlist(newList.id);
+  }
 
   // Header height (white bar below the iOS status area)
   const headerBarHeight = 56;
@@ -311,8 +396,9 @@ export default function ListingDetailsPage() {
           </TouchableOpacity>
 
           <View style={styles.headerRightRow}>
+            {/* ⬇️ CHANGED: open wishlist picker instead of just toggling */}
             <TouchableOpacity
-              onPress={() => setIsFavorite((v) => !v)}
+              onPress={() => setPickerVisible(true)}
               style={styles.headerIconButton}
             >
               <Heart size={20} color="#111827" fill={isFavorite ? '#ef4444' : 'transparent'} />
@@ -546,15 +632,7 @@ export default function ListingDetailsPage() {
 
           <View style={styles.divider} />
 
-          <View style={styles.reviewsHeader}>
-            <Text style={styles.sectionTitle}>Reviews</Text>
-            <View style={styles.infoRow}>
-              <Star size={16} color="#F59E0B" fill="#F59E0B" />
-              <Text style={styles.infoTextBold}>{listing.rating}</Text>
-              <Text style={styles.infoText}>({listing.reviewsCount} reviews)</Text>
-            </View>
-          </View>
-
+          <Text style={styles.sectionTitle}>Reviews</Text>
           <View style={styles.reviewCardContainer}>
             {listing.reviews.map((review) => (
               <View key={review.id} style={styles.reviewCard}>
@@ -591,37 +669,102 @@ export default function ListingDetailsPage() {
       </ScrollView>
 
       {/* Sticky Footer */}
-        <View style={[styles.footer, { paddingBottom: bottom + 10 }]}>
-            <View>
-                <Text style={styles.footerPrice}>₹{listing.price.toLocaleString('en-IN')}<Text style={styles.footerPriceNight}> /night</Text></Text>
-            </View>
-            <TouchableOpacity 
-                style={[styles.reserveButton, (!checkInDate || !checkOutDate) && styles.disabledButton]} 
-                disabled={!checkInDate || !checkOutDate}
-                onPress={() => {
-                    if (!checkInDate || !checkOutDate) {
-                        Alert.alert("Missing Dates", "Please select your check-in and check-out dates first.");
-                        return;
-                    }
-                    router.push({
-                        pathname: '/booking',
-                        params: { 
-                            listingId: listing.id,
-                            listingName: listing.name,
-                            listingLocation: listing.locality,
-                            basePrice: listing.price,
-                            checkIn: checkInDate,
-                            checkOut: checkOutDate,
-                            guests: guests,
-                            lat: listing.coordinates.latitude,
-                            lon: listing.coordinates.longitude,
-                        }
-                    });
-                }}
-            >
-                <Text style={styles.reserveButtonText}>Reserve</Text>
-            </TouchableOpacity>
+      <View style={[styles.footer, { paddingBottom: bottom + 10 }]}>
+        <View>
+          <Text style={styles.footerPrice}>₹{listing.price.toLocaleString('en-IN')}<Text style={styles.footerPriceNight}> /night</Text></Text>
         </View>
+        <TouchableOpacity 
+          style={[styles.reserveButton, (!checkInDate || !checkOutDate) && styles.disabledButton]} 
+          disabled={!checkInDate || !checkOutDate}
+          onPress={() => {
+            if (!checkInDate || !checkOutDate) {
+              Alert.alert("Missing Dates", "Please select your check-in and check-out dates first.");
+              return;
+            }
+            router.push({
+              pathname: '/booking',
+              params: { 
+                listingId: listing.id,
+                listingName: listing.name,
+                listingLocation: listing.locality,
+                basePrice: listing.price,
+                checkIn: checkInDate,
+                checkOut: checkOutDate,
+                guests: guests,
+                lat: listing.coordinates.latitude,
+                lon: listing.coordinates.longitude,
+              }
+            });
+          }}
+        >
+          <Text style={styles.reserveButtonText}>Reserve</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* ⬇️ ADDED: Wishlist Picker Modal */}
+      <Modal
+        visible={pickerVisible}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setPickerVisible(false)}
+      >
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={() => setPickerVisible(false)}
+          style={styles.wlOverlay}
+        >
+          <TouchableOpacity activeOpacity={1} style={styles.wlSheet}>
+            <View style={styles.wlHeader}>
+              <Text style={styles.wlTitle}>Add to a list</Text>
+              <Text style={styles.wlSubtitle}>Choose a wishlist to save this place</Text>
+            </View>
+
+            {wishlists.map((l) => (
+              <TouchableOpacity key={l.id} onPress={() => saveToWishlist(l.id)} style={styles.wlRow}>
+                <View style={{ flex: 1, paddingRight: 12 }}>
+                  <Text style={styles.wlRowTitle} numberOfLines={1}>{l.name}</Text>
+                  <Text style={styles.wlRowSubtitle}>{l.count ?? 0} {l.count === 1 ? 'item' : 'items'}</Text>
+                </View>
+                <Text style={styles.wlRowAction}>Add</Text>
+              </TouchableOpacity>
+            ))}
+
+            {!creatingNew ? (
+              <TouchableOpacity onPress={() => setCreatingNew(true)} style={styles.wlCreateBtn}>
+                <Text style={styles.wlCreateBtnText}>+ Create new list</Text>
+              </TouchableOpacity>
+            ) : (
+              <View style={styles.wlCreateForm}>
+                <TextInput
+                  placeholder="List name (e.g., Weekend Getaways)"
+                  value={newListName}
+                  onChangeText={setNewListName}
+                  style={styles.wlInput}
+                  maxLength={50}
+                />
+                <TextInput
+                  placeholder="Description (optional)"
+                  value={newListDesc}
+                  onChangeText={setNewListDesc}
+                  style={[styles.wlInput, { borderColor: '#E5E7EB' }]}
+                  maxLength={100}
+                />
+                <View style={styles.wlFormActions}>
+                  <TouchableOpacity
+                    onPress={() => { setCreatingNew(false); setNewListName(''); setNewListDesc(''); }}
+                    style={styles.wlSecondaryBtn}
+                  >
+                    <Text style={styles.wlSecondaryBtnText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={createListAndSave} style={styles.wlPrimaryBtn}>
+                    <Text style={styles.wlPrimaryBtnText}>Create & Add</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
 
       {/* Date Picker */}
       <DatePickerModal
@@ -666,7 +809,6 @@ const styles = StyleSheet.create({
     height: 36,
     justifyContent: 'center',
     alignItems: 'center',
-    // soft shadow (iOS) / elevation (Android)
     shadowColor: '#000',
     shadowOpacity: 0.08,
     shadowRadius: 4,
@@ -700,7 +842,6 @@ const styles = StyleSheet.create({
   },
   imageCounterText: { color: 'white', fontSize: 12, fontWeight: '500' },
 
-  // Center the arrows vertically
   carouselNav: {
     position: 'absolute',
     top: '50%',
@@ -957,4 +1098,70 @@ const styles = StyleSheet.create({
   },
   showButtonText: { fontSize: 16, fontWeight: '600', color: 'white' },
   disabledButton: { backgroundColor: '#D1D5DB' },
+
+  /* ⬇️ ADD THESE NEW STYLES ONLY */
+  wlOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  wlSheet: {
+    width: '100%',
+    maxWidth: 440,
+    backgroundColor: 'white',
+    borderRadius: 12,
+    paddingVertical: 8,
+    overflow: 'hidden',
+  },
+  wlHeader: {
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  wlTitle: { fontSize: 16, fontWeight: '700', color: '#111827' },
+  wlSubtitle: { marginTop: 2, fontSize: 13, color: '#6B7280' },
+  wlRow: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  wlRowTitle: { fontSize: 15, fontWeight: '600', color: '#111827' },
+  wlRowSubtitle: { fontSize: 12, color: '#6B7280' },
+  wlRowAction: { fontSize: 12, color: '#9CA3AF' },
+  wlCreateBtn: { padding: 16, alignItems: 'center' },
+  wlCreateBtnText: { fontSize: 15, fontWeight: '600', color: '#111827' },
+  wlCreateForm: { padding: 16, gap: 8 },
+  wlInput: {
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 15,
+  },
+  wlFormActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 12,
+    marginTop: 4,
+  },
+  wlSecondaryBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 8,
+  },
+  wlSecondaryBtnText: { fontWeight: '700', color: '#111827' },
+  wlPrimaryBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    backgroundColor: '#111827',
+    borderRadius: 8,
+  },
+  wlPrimaryBtnText: { fontWeight: '700', color: 'white' },
 });
