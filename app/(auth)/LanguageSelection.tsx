@@ -4,8 +4,8 @@ import AuthHeader from '@/components/ui/authHeader';
 import { styles } from '@/styles/language.styles';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import React from 'react';
-import { FlatList, Text, TouchableOpacity } from 'react-native';
+import React, { useState } from 'react';
+import { FlatList, Pressable, Text, TextStyle, ViewStyle } from 'react-native';
 
 // Added all 22 scheduled Indian languages + English
 const languages = [
@@ -35,14 +35,17 @@ const languages = [
 ];
 
 export default function LanguageSelection() {
+  const [selected, setSelected] = useState<string | null>(null);
+
   const selectLanguage = (langCode: string) => {
-    console.log('Selected language:', langCode);
-    
-    // --- THIS IS THE FIX ---
-    // Ensure the path correctly points to 'LoginPage'
+    setSelected(langCode); // persist highlight after tap
+    // Navigate to Login
     router.push('/(auth)/LoginPage');
-    // -----------------------
   };
+
+  // Active styles (reused for hover/press/selected)
+  const activeTile: ViewStyle = { backgroundColor: '#000000', borderColor: '#000000' };
+  const activeText: TextStyle = { color: '#FFFFFF' };
 
   return (
     <AuthContainer>
@@ -51,19 +54,30 @@ export default function LanguageSelection() {
         title="Select Language"
         subtitle="भाषा चुनें | Choose your preferred language"
       />
-      
+
       <FlatList
         data={languages}
         numColumns={2}
         keyExtractor={(item) => item.code}
         renderItem={({ item }) => (
-          <TouchableOpacity 
-            style={styles.langButton} 
+          <Pressable
             onPress={() => selectLanguage(item.code)}
+            // Pressable style callback gives us `pressed`, and on web also `hovered`
+            style={({ pressed, hovered }: { pressed: boolean; hovered?: boolean }) => [
+              styles.langButton,
+              (pressed || hovered || selected === item.code) && activeTile,
+            ]}
           >
-            <Text style={styles.langName}>{item.name}</Text>
-            <Text style={styles.langEnglishName}>{item.englishName}</Text>
-          </TouchableOpacity>
+            {({ pressed, hovered }) => {
+              const isActive = pressed || hovered || selected === item.code;
+              return (
+                <>
+                  <Text style={[styles.langName, isActive && activeText]}>{item.name}</Text>
+                  <Text style={[styles.langEnglishName, isActive && activeText]}>{item.englishName}</Text>
+                </>
+              );
+            }}
+          </Pressable>
         )}
         contentContainerStyle={styles.grid}
       />
