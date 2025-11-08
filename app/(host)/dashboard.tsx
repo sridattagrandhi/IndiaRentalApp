@@ -119,7 +119,7 @@ const QuickActionButton = ({ icon, label, onPress }: QuickActionButtonProps) => 
 // --- Main Dashboard Screen ---
 export default function HostDashboardScreen() {
   const router = useRouter();
-  const userName = 'Rajesh';
+  const userName = 'Priya';
 
   const handleQuickAction = (action: string) => Alert.alert('Quick Action', `Navigating to ${action}...`);
   const handleAlertClick = (alert: AlertItem) => Alert.alert('Alert', `Navigating to handle: ${alert.title}`);

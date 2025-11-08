@@ -55,11 +55,11 @@ export default function HostProfileScreen() {
   const router = useRouter();
 
   const hostData = {
-    name: 'Rajesh Kumar',
-    avatar: 'https://i.pravatar.cc/150?img=12',
+    name: 'Priya Sharma',
+    avatar: 'https://images.unsplash.com/photo-1611246981370-93febc04e6d5?ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D&auto=format&fit=crop&q=80&w=774',
     memberSince: 'Oct 2024',
     isVerified: true,
-    email: 'rajesh.kumar@example.com',
+    email: 'priya.sharma@example.com',
     kycStatus: 'verified' as 'incomplete' | 'pending' | 'verified',
     bankVerified: true,
     propertyVerified: true,

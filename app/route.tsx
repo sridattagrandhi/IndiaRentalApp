@@ -8,7 +8,7 @@ import {
   Minus, ParkingCircle, Plus,
   Route as RouteIcon, SlidersHorizontal, Star, Users, X
 } from 'lucide-react-native';
-import React, { Dispatch, SetStateAction, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert, Dimensions, Keyboard, LayoutChangeEvent, Modal, SafeAreaView, ScrollView,
   SectionList, StyleSheet, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, View
@@ -35,6 +35,7 @@ interface Property {
   id: string; name: string; location: string; price: number; rating: number;
   distanceFromRoute: string; segmentDistance: string; image: string; features: string[];
   routeSegment: string; coordinates: { latitude: number; longitude: number; };
+  type?: 'room' | 'home' | 'hotel';
 }
 const mockProperties: Property[] = [
   { id: '1', name: 'Highway Rest Inn', location: 'Near Panvel Toll Plaza', price: 1800, rating: 4.5, distanceFromRoute: '0.5 km', segmentDistance: '42 km from Mumbai', image: 'https://images.unsplash.com/photo-1566073771259-6a8506099945?q=80&w=1200&auto=format&fit=crop', features: ['Parking', '24×7 Check-in', 'Highway Access'], routeSegment: 'Near Panvel', coordinates: { latitude: 18.9894, longitude: 73.1175 } },
@@ -153,17 +154,30 @@ const CustomCheckbox = ({ label, description, value, onValueChange, icon }: Cust
 // --- Filters Modal ---
 interface RoadTripFilterPanelProps {
   isVisible: boolean; onClose: () => void; applyFilters: () => void; clearFilters: () => void;
-  filteredCount: number; hasParking: boolean; setHasParking: Dispatch<SetStateAction<boolean>>;
-  has24x7Checkin: boolean; setHas24x7Checkin: Dispatch<SetStateAction<boolean>>;
-  hasHighwayAccess: boolean; setHasHighwayAccess: Dispatch<SetStateAction<boolean>>;
-  hasEvCharging: boolean; setHasEvCharging: Dispatch<SetStateAction<boolean>>;
+  filteredCount: number;
+  hasParking: boolean; setHasParking: React.Dispatch<React.SetStateAction<boolean>>;
+  has24x7Checkin: boolean; setHas24x7Checkin: React.Dispatch<React.SetStateAction<boolean>>;
+  hasHighwayAccess: boolean; setHasHighwayAccess: React.Dispatch<React.SetStateAction<boolean>>;
+  hasEvCharging: boolean; setHasEvCharging: React.Dispatch<React.SetStateAction<boolean>>;
+
+  // NEW
+  propertyTypes: string[]; setPropertyTypes: React.Dispatch<React.SetStateAction<string[]>>;
+  amenities: string[]; setAmenities: React.Dispatch<React.SetStateAction<string[]>>;
+  minRating: string; setMinRating: React.Dispatch<React.SetStateAction<string>>;
 }
+
 function RoadTripFilterPanel(props: RoadTripFilterPanelProps) {
   const {
     isVisible, onClose, applyFilters, clearFilters, filteredCount,
     hasParking, setHasParking, has24x7Checkin, setHas24x7Checkin,
     hasHighwayAccess, setHasHighwayAccess, hasEvCharging, setHasEvCharging,
+    propertyTypes, setPropertyTypes, amenities, setAmenities, minRating, setMinRating,
   } = props;
+
+  const togglePropertyType = (type: string) =>
+    setPropertyTypes((prev) => (prev.includes(type) ? prev.filter((t) => t !== type) : [...prev, type]));
+  const toggleAmenity = (a: string) =>
+    setAmenities((prev) => (prev.includes(a) ? prev.filter((x) => x !== a) : [...prev, a]));
 
   return (
     <Modal visible={isVisible} animationType="slide" transparent={false} onRequestClose={onClose}>
@@ -172,14 +186,65 @@ function RoadTripFilterPanel(props: RoadTripFilterPanelProps) {
           <Text style={styles.modalTitle}>Road Trip Filters</Text>
           <TouchableOpacity onPress={onClose} style={styles.modalCloseButton}><X size={24} color="#111827" /></TouchableOpacity>
         </View>
+
         <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modalScrollContent}>
+          {/* Existing route-specific toggles */}
           <View style={styles.filterSection}>
             <CustomCheckbox label="Parking Available" description="Secure parking for your vehicle" value={hasParking} onValueChange={setHasParking} icon={<ParkingCircle size={22} color="#111827" />} />
             <CustomCheckbox label="24x7 Check-in" description="Arrive anytime, day or night" value={has24x7Checkin} onValueChange={setHas24x7Checkin} icon={<Clock size={22} color="#111827" />} />
             <CustomCheckbox label="Highway Access" description="Easy access from highway" value={hasHighwayAccess} onValueChange={setHasHighwayAccess} icon={<RouteIcon size={22} color="#111827" />} />
             <CustomCheckbox label="EV Charging" description="Electric vehicle charging available" value={hasEvCharging} onValueChange={setHasEvCharging} icon={<Fuel size={22} color="#111827" />} />
           </View>
+
+          {/* NEW: Property type */}
+          <View style={[styles.filterSection, { marginTop: 24 }]}>
+            <Text style={{ fontSize: 16, fontWeight: '700', color: '#111827', marginBottom: 8 }}>Property Type</Text>
+            {['Room', 'Home', 'Hotel'].map((type) => (
+              <TouchableOpacity
+                key={type}
+                style={styles.checkRow}
+                onPress={() => togglePropertyType(type.toLowerCase())}
+              >
+                <View style={[styles.checkbox, propertyTypes.includes(type.toLowerCase()) && styles.checkboxChecked]}>
+                  {propertyTypes.includes(type.toLowerCase()) && <Check size={12} color="#FFFFFF" />}
+                </View>
+                <View style={styles.checkTextContainer}><Text style={styles.checkLabel}>{type}</Text></View>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          {/* NEW: Amenities */}
+          <View style={[styles.filterSection, { marginTop: 16 }]}>
+            <Text style={{ fontSize: 16, fontWeight: '700', color: '#111827', marginBottom: 8 }}>Amenities</Text>
+            {['Parking', 'WiFi', 'Restaurant', 'EV Charging', '24×7 Check-in', 'Highway Access'].map((a) => (
+              <TouchableOpacity key={a} style={styles.checkRow} onPress={() => toggleAmenity(a)}>
+                <View style={[styles.checkbox, amenities.includes(a) && styles.checkboxChecked]}>
+                  {amenities.includes(a) && <Check size={12} color="#FFFFFF" />}
+                </View>
+                <View style={styles.checkTextContainer}><Text style={styles.checkLabel}>{a}</Text></View>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          {/* NEW: Minimum Rating */}
+          <View style={[styles.filterSection, { marginTop: 16 }]}>
+            <Text style={{ fontSize: 16, fontWeight: '700', color: '#111827', marginBottom: 8 }}>Minimum Rating</Text>
+            {['0', '3.5', '4.0', '4.5'].map((r) => {
+              const selected = minRating === r;
+              return (
+                <TouchableOpacity key={r} style={styles.checkRow} onPress={() => setMinRating(r)}>
+                  <View style={[styles.radio, selected && styles.radioChecked]}>
+                    {selected && <View style={styles.radioCheckedInner} />}
+                  </View>
+                  <View style={styles.checkTextContainer}>
+                    <Text style={styles.checkLabel}>{r === '0' ? 'Any' : `${r} & up`}</Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
         </ScrollView>
+
         <View style={styles.modalFooter}>
           <TouchableOpacity style={styles.clearButton} onPress={clearFilters}><Text style={styles.clearButtonText}>Clear all</Text></TouchableOpacity>
           <TouchableOpacity style={styles.showButton} onPress={applyFilters}><Text style={styles.showButtonText}>Show {filteredCount} results</Text></TouchableOpacity>
@@ -188,6 +253,7 @@ function RoadTripFilterPanel(props: RoadTripFilterPanelProps) {
     </Modal>
   );
 }
+
 
 // --- Date Picker ---
 interface DatePickerModalProps {
@@ -363,6 +429,10 @@ export default function RoutePlannerPage() {
   const [has24x7Checkin, setHas24x7Checkin] = useState(false);
   const [hasHighwayAccess, setHasHighwayAccess] = useState(false);
   const [hasEvCharging, setHasEvCharging] = useState(false);
+  const [propertyTypes, setPropertyTypes] = useState<string[]>([]);
+  const [amenities, setAmenities] = useState<string[]>([]);
+  const [minRating, setMinRating] = useState('0');
+
   const [filteredProperties, setFilteredProperties] = useState(mockProperties);
 
   // Bottom sheet state
@@ -599,11 +669,45 @@ export default function RoutePlannerPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fromCoords?.lat, fromCoords?.lon, toCoords?.lat, toCoords?.lon]);
 
-  const applyFilters = () => { setFilteredProperties(mockProperties); setFilterModalVisible(false); };
+  const applyFilters = () => {
+    let out = [...mockProperties];
+
+    // Road toggles
+    if (hasParking) out = out.filter((p) => p.features.includes('Parking'));
+    if (has24x7Checkin) out = out.filter((p) => p.features.includes('24×7 Check-in'));
+    if (hasHighwayAccess) out = out.filter((p) => p.features.includes('Highway Access'));
+    if (hasEvCharging) out = out.filter((p) => p.features.includes('EV Charging'));
+
+    // Property type (default to 'hotel' when missing)
+    if (propertyTypes.length > 0) {
+      const set = new Set(propertyTypes);
+      out = out.filter((p) => set.has((p.type || 'hotel').toLowerCase()));
+    }
+
+    // Amenities (intersection)
+    if (amenities.length > 0) {
+      out = out.filter((p) => amenities.every((a) => p.features.includes(a)));
+    }
+
+    // Minimum rating
+    const minR = parseFloat(minRating || '0') || 0;
+    out = out.filter((p) => p.rating >= minR);
+
+    setFilteredProperties(out);
+    setFilterModalVisible(false);
+  };
+
   const clearFilters = () => {
-    setHasParking(false); setHas24x7Checkin(false); setHasHighwayAccess(false); setHasEvCharging(false);
+    setHasParking(false);
+    setHas24x7Checkin(false);
+    setHasHighwayAccess(false);
+    setHasEvCharging(false);
+    setPropertyTypes([]);
+    setAmenities([]);
+    setMinRating('0');
     setFilteredProperties(mockProperties);
   };
+
 
   const renderPriceMarker = (price: number) => (
     <View style={styles.priceTagWrap}><Text style={styles.priceTagText}>₹{(price / 1000).toFixed(1)}k</Text></View>
@@ -811,14 +915,20 @@ export default function RoutePlannerPage() {
             </TouchableOpacity>
 
             <RoadTripFilterPanel
-              isVisible={isFilterModalVisible} onClose={() => setFilterModalVisible(false)}
-              applyFilters={applyFilters} clearFilters={clearFilters}
+              isVisible={isFilterModalVisible}
+              onClose={() => setFilterModalVisible(false)}
+              applyFilters={applyFilters}
+              clearFilters={clearFilters}
               filteredCount={filteredProperties.length}
               hasParking={hasParking} setHasParking={setHasParking}
               has24x7Checkin={has24x7Checkin} setHas24x7Checkin={setHas24x7Checkin}
               hasHighwayAccess={hasHighwayAccess} setHasHighwayAccess={setHasHighwayAccess}
               hasEvCharging={hasEvCharging} setHasEvCharging={setHasEvCharging}
+              propertyTypes={propertyTypes} setPropertyTypes={setPropertyTypes}
+              amenities={amenities} setAmenities={setAmenities}
+              minRating={minRating} setMinRating={setMinRating}
             />
+
 
             <DatePickerModal
               isVisible={isDatePickerVisible}
@@ -1000,4 +1110,7 @@ const styles = StyleSheet.create({
     shadowRadius: 2,
     elevation: 2,
   },
+  radio: { width: 18, height: 18, borderRadius: 9, borderWidth: 2, borderColor: '#B0B0B0', alignItems: 'center', justifyContent: 'center' },
+  radioChecked: { borderColor: '#111827' },
+  radioCheckedInner: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#111827' },
 });

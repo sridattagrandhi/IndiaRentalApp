@@ -523,9 +523,101 @@ export default function SearchPage() {
     }
   };
 
-  const applyFilters = () => { setFilteredProperties(mockProperties); setFilterModalVisible(false); };
-  const clearFilters = () => { setFilteredProperties(mockProperties); };
-  const onSelectSort = (opt: string) => { setSortBy(opt); setShowSortDropdown(false); };
+  const applyFilters = () => {
+    // Distance helper
+    const toRad = (d: number) => (d * Math.PI) / 180;
+    const haversineKm = (a: { latitude: number; longitude: number }, b: { latitude: number; longitude: number }) => {
+      const R = 6371;
+      const dLat = toRad(b.latitude - a.latitude);
+      const dLon = toRad(b.longitude - a.longitude);
+      const la1 = toRad(a.latitude);
+      const la2 = toRad(b.latitude);
+      const h =
+        Math.sin(dLat / 2) ** 2 +
+        Math.cos(la1) * Math.cos(la2) * Math.sin(dLon / 2) ** 2;
+      return 2 * R * Math.asin(Math.sqrt(h));
+    };
+
+    let out = [...mockProperties];
+
+    // price
+    out = out.filter((p) => p.price >= priceRange[0] && p.price <= priceRange[1]);
+
+    // property types
+    if (propertyTypes.length > 0) {
+      const set = new Set(propertyTypes); // ['room','home','hotel']
+      out = out.filter((p) => set.has(p.type));
+    }
+
+    // amenities
+    if (amenities.length > 0) {
+      out = out.filter((p) => amenities.every((a) => p.features.includes(a)));
+    }
+
+    // min rating
+    const minR = parseFloat(minRating || '0') || 0;
+    out = out.filter((p) => p.rating >= minR);
+
+    // instant book
+    if (instantBookOnly) out = out.filter((p) => p.instantBook);
+
+    // radius from current region center (if defined)
+    if (region) {
+      out = out.filter((p) => {
+        const km = haversineKm(
+          { latitude: region.latitude, longitude: region.longitude },
+          p.coordinates
+        );
+        return km <= radiusKm;
+      });
+    }
+
+    // sorting
+    const by = sortBy;
+    const center = region;
+    const distCache = new globalThis.Map<string, number>();
+    const getDist = (p: typeof mockProperties[number]) => {
+      if (!center) return Number.MAX_SAFE_INTEGER;
+      const key = p.id;
+      if (distCache.has(key)) return distCache.get(key)!;
+      const toRad = (d: number) => (d * Math.PI) / 180;
+      const R = 6371;
+      const dLat = toRad(p.coordinates.latitude - center.latitude);
+      const dLon = toRad(p.coordinates.longitude - center.longitude);
+      const la1 = toRad(center.latitude);
+      const la2 = toRad(p.coordinates.latitude);
+      const h = Math.sin(dLat / 2) ** 2 + Math.cos(la1) * Math.cos(la2) * Math.sin(dLon / 2) ** 2;
+      const km = 2 * R * Math.asin(Math.sqrt(h));
+      distCache.set(key, km);
+      return km;
+    };
+
+    if (by === 'Lowest price') out.sort((a, b) => a.price - b.price);
+    else if (by === 'Highest rated') out.sort((a, b) => b.rating - a.rating);
+    else if (by === 'Closest') out.sort((a, b) => getDist(a) - getDist(b));
+    // 'Best match' = leave as-is for now.
+
+    setFilteredProperties(out);
+    setFilterModalVisible(false);
+  };
+
+  const clearFilters = () => {
+    setPriceRange([0, 10000]);
+    setPropertyTypes([]);
+    setAmenities([]);
+    setMinRating('0');
+    setInstantBookOnly(false);
+    setRadiusKm(10);
+    setFilteredProperties(mockProperties);
+  };
+
+  const onSelectSort = (opt: string) => {
+    setSortBy(opt);
+    setShowSortDropdown(false);
+    // immediately sort current list for snappy UX
+    applyFilters();
+  };
+
 
   const renderSortDropdown = () => (
     <View style={styles.dropdown}>
