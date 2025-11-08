@@ -1,0 +1,204 @@
+service: india-rental-api
+frameworkVersion: "3"
+useDotenv: true 
+
+plugins:
+  - serverless-python-requirements
+  #- serverless-dotenv-plugin
+
+custom:
+  pythonRequirements:
+    layer: true
+    slim: false
+    zip: true
+    #dockerizePip: true
+    useStaticCache: false
+  photosBucketName: india-rental-api-${sls:stage}-photos-${aws:accountId}
+
+package:
+  patterns:
+    - '!scripts/**'
+    - '!**/*.md'
+    - '!**/.env*'
+
+provider:
+  name: aws
+  runtime: python3.11
+  region: ap-south-1
+  stage: dev
+  memorySize: 512
+  timeout: 10
+  environment:
+    DATABASE_URL: ${env:DATABASE_URL}
+    DEBUG_ERRORS: "true"
+    PHOTOS_BUCKET: ${self:custom.photosBucketName}
+  vpc:
+    securityGroupIds:
+      - sg-095e7678a6d9a0f01
+    subnetIds:
+      - subnet-03b642ce96bdf3a68
+      - subnet-04dce03efae18c39f
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - s3:PutObject
+        - s3:PutObjectAcl
+        - s3:GetObject
+        - s3:ListBucket
+      Resource:
+        - arn:aws:s3:::${self:provider.environment.PHOTOS_BUCKET}
+        - arn:aws:s3:::${self:provider.environment.PHOTOS_BUCKET}/*
+  httpApi:
+    payload: "2.0"
+    cors: true
+    authorizers:
+      CognitoJwt:
+        type: jwt
+        identitySource: $request.header.Authorization
+        issuerUrl: https://cognito-idp.ap-south-1.amazonaws.com/${env:COGNITO_USER_POOL_ID}
+        audience:
+          - ${env:COGNITO_APP_CLIENT_ID}
+
+layers:
+  common:
+    path: layers/common
+    name: ${sls:stage}-common
+    compatibleRuntimes: [python3.11]
+
+functions:
+  health:
+    handler: functions/health/handler.health
+    layers:
+      - ${cf:${self:service}-${sls:stage}.PythonRequirementsLambdaLayerQualifiedArn}
+      - ${cf:${self:service}-${sls:stage}.CommonLambdaLayerQualifiedArn}
+    events:
+      - httpApi:
+          path: /v1/health
+          method: GET
+      - httpApi:
+          path: /v1/health/db
+          method: GET
+
+  me:
+    handler: functions/health/handler.me
+    layers:
+      - ${cf:${self:service}-${sls:stage}.PythonRequirementsLambdaLayerQualifiedArn}
+      - ${cf:${self:service}-${sls:stage}.CommonLambdaLayerQualifiedArn}
+    events:
+      - httpApi:
+          path: /v1/me
+          method: GET
+          authorizer:
+            name: CognitoJwt
+
+
+  list_listings:
+    handler: functions/listings/handler.list_listings
+    layers:
+      - ${cf:${self:service}-${sls:stage}.PythonRequirementsLambdaLayerQualifiedArn}
+      - ${cf:${self:service}-${sls:stage}.CommonLambdaLayerQualifiedArn}
+    events:
+      - httpApi:
+          path: /v1/listings
+          method: GET
+
+  get_listing:
+    handler: functions/listings/handler.get_listing
+    layers:
+      - ${cf:${self:service}-${sls:stage}.PythonRequirementsLambdaLayerQualifiedArn}
+      - ${cf:${self:service}-${sls:stage}.CommonLambdaLayerQualifiedArn}
+    events:
+      - httpApi:
+          path: /v1/listings/{listing_id}
+          method: GET
+
+  search:
+    handler: functions/search/handler.search
+    layers:
+      - ${cf:${self:service}-${sls:stage}.PythonRequirementsLambdaLayerQualifiedArn}
+      - ${cf:${self:service}-${sls:stage}.CommonLambdaLayerQualifiedArn}
+    events:
+      - httpApi:
+          path: /v1/search
+          method: GET
+  
+  health_listings:
+    handler: functions/listings/handler.health_listings
+    layers:
+      - ${cf:${self:service}-${sls:stage}.PythonRequirementsLambdaLayerQualifiedArn}
+      - ${cf:${self:service}-${sls:stage}.CommonLambdaLayerQualifiedArn}
+    events:
+    - httpApi:
+        path: /v1/health/listings
+        method: GET
+        
+  presign_upload:
+    handler: functions/uploads/handler.presign_upload
+    layers:
+      - ${cf:${self:service}-${sls:stage}.PythonRequirementsLambdaLayerQualifiedArn}
+      - ${cf:${self:service}-${sls:stage}.CommonLambdaLayerQualifiedArn}
+    events:
+      - httpApi:
+          path: /v1/uploads/presign
+          method: POST
+          authorizer:
+            name: CognitoJwt
+  
+  get_profile:
+    handler: functions/profile/handler.get_profile
+    events:
+      - httpApi:
+          path: /v1/profile
+          method: get
+          authorizer:
+            name: CognitoJwt
+
+  upsert_profile:
+    handler: functions/profile/handler.upsert_profile
+    events:
+      - httpApi:
+          path: /v1/profile
+          method: put
+          authorizer:
+            name: CognitoJwt
+  
+  route_search:
+    handler: functions/route/handler.route_search
+    layers:
+      - ${cf:${self:service}-${sls:stage}.PythonRequirementsLambdaLayerQualifiedArn}
+      - ${cf:${self:service}-${sls:stage}.CommonLambdaLayerQualifiedArn}
+    events:
+      - httpApi:
+          path: /v1/route-search
+          method: get
+
+resources:
+  Resources:
+    PhotosBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${self:custom.photosBucketName}
+        PublicAccessBlockConfiguration:
+          BlockPublicAcls: false
+          BlockPublicPolicy: false
+          IgnorePublicAcls: false
+          RestrictPublicBuckets: false
+        CorsConfiguration:
+          CorsRules:
+            - AllowedOrigins: ['*']
+              AllowedMethods: [GET, PUT, HEAD]
+              AllowedHeaders: ['*']
+              MaxAge: 300
+
+    PhotosBucketPolicy:
+      Type: AWS::S3::BucketPolicy
+      Properties:
+        Bucket: ${self:custom.photosBucketName}
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            - Sid: PublicReadPhotos
+              Effect: Allow
+              Principal: "*"
+              Action: s3:GetObject
+              Resource: arn:aws:s3:::${self:custom.photosBucketName}/photos/*

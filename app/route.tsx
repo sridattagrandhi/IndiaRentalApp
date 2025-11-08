@@ -19,6 +19,9 @@ import MapView, { Marker, Polyline, PROVIDER_DEFAULT, Region } from 'react-nativ
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+// ✅ NEW: call your backend
+import { apiGet } from '@/services/api';
+
 // ---- Height constants ----
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const BOTTOM_SHEET_MIN_HEIGHT = SCREEN_HEIGHT * 0.15;
@@ -339,6 +342,42 @@ type RouteOption = {
   timeMin: number;
 };
 
+// ✅ NEW: helper to normalize what backend wants
+const toBackendCoords = (coords: { latitude: number; longitude: number }[]) =>
+  coords.map(c => [c.longitude, c.latitude]);
+
+function thinCoords<T>(arr: T[], maxPoints = 250): T[] {
+  if (!arr || arr.length <= maxPoints) return arr;
+  const step = Math.ceil(arr.length / maxPoints);
+  const thinned = [];
+  for (let i = 0; i < arr.length; i += step) thinned.push(arr[i]);
+  // always include the last point
+  if (thinned[thinned.length - 1] !== arr[arr.length - 1]) {
+    thinned.push(arr[arr.length - 1]);
+  }
+  return thinned;
+}
+
+// ✅ NEW: fetch listings along route
+async function fetchStaysAlongRoute(
+  routeCoords: { latitude: number; longitude: number }[],
+  radiusKm: number,
+  cursor?: number
+) {
+  const thinned = thinCoords(routeCoords, 250);
+  const params: Record<string, string> = {
+    coords: JSON.stringify(toBackendCoords(thinned)),
+    radius_km: String(radiusKm),
+    limit: '50',
+  };
+  if (cursor != null) params.cursor = String(cursor);
+
+  return apiGet<{ count: number; results: any[]; next_cursor: number | null }>(
+    '/v1/route-search',
+    params
+  );
+}
+
 export default function RoutePlannerPage() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -363,7 +402,14 @@ export default function RoutePlannerPage() {
   const [has24x7Checkin, setHas24x7Checkin] = useState(false);
   const [hasHighwayAccess, setHasHighwayAccess] = useState(false);
   const [hasEvCharging, setHasEvCharging] = useState(false);
-  const [filteredProperties, setFilteredProperties] = useState(mockProperties);
+
+  // ✅ NEW: live data from backend (replaces mock)
+  const [routeListings, setRouteListings] = useState<Property[]>([]);
+  const [routeNext, setRouteNext] = useState<number | null>(null);
+  const [loadingRoute, setLoadingRoute] = useState(false);
+
+  // what the UI renders (kept same prop name to avoid UI changes)
+  const [filteredProperties, setFilteredProperties] = useState<Property[]>(mockProperties);
 
   // Bottom sheet state
   const [maxSheetHeight, setMaxSheetHeight] = useState(DEFAULT_MAX_HEIGHT);
@@ -407,7 +453,6 @@ export default function RoutePlannerPage() {
       );
     }
   };
-
 
   const clampHeightsFromLayout = (containerHeight: number) => {
     const allowedMax = Math.max(
@@ -526,10 +571,11 @@ export default function RoutePlannerPage() {
         });
       }
     } catch (e: any) {
-      console.error('Routing failed:', e);
-      Alert.alert('Routing Error', e?.message || 'Unable to fetch route.');
+      Alert.alert('Route search error', e?.message ?? 'Failed to fetch stays along route.');
+      setRouteListings([]);            // keep empty on error
+      setFilteredProperties([]);       // don't show mocks on failure
     } finally {
-      setRoutingBusy(false);
+      setLoadingRoute(false);
     }
   };
 
@@ -599,10 +645,89 @@ export default function RoutePlannerPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fromCoords?.lat, fromCoords?.lon, toCoords?.lat, toCoords?.lon]);
 
-  const applyFilters = () => { setFilteredProperties(mockProperties); setFilterModalVisible(false); };
+  // ✅ NEW: whenever we have a route & radius, pull listings from backend
+  useEffect(() => {
+    (async () => {
+      if (!bestRoute?.coords?.length) return;
+      setLoadingRoute(true);
+      try {
+        const radiusNum = Number((selectedRadius || '5 km of route').split(' ')[0]);
+        const data = await fetchStaysAlongRoute(bestRoute.coords, radiusNum);
+        const mapped: Property[] = (data.results ?? []).map((it: any) => ({
+          id: String(it.id),
+          name: it.title ?? it.name ?? 'Stay',
+          location: it.full_address || it.street || it.city || '—',
+          price: Number(it.price ?? 0),
+          rating: Number(it.rating ?? 0),
+          distanceFromRoute:
+            typeof it.distance_from_route_km === 'number'
+              ? `${it.distance_from_route_km.toFixed(1)} km`
+              : '—',
+          segmentDistance: '', // optional: compute “X km from origin” client-side later
+          image: it.photo_url ?? 'https://picsum.photos/seed/route/640/480',
+          features: Array.isArray(it.amenities) ? it.amenities : [],
+          routeSegment: 'Along route',
+          coordinates: {
+            latitude: Number(it.coordinates?.latitude ?? it.latitude),
+            longitude: Number(it.coordinates?.longitude ?? it.longitude),
+          },
+        }));
+        setRouteListings(mapped);
+        setRouteNext(data.next_cursor ?? null);
+        setFilteredProperties(mapped.length ? mapped : mockProperties);
+      } catch (e: any) {
+        Alert.alert('Route search error', e?.message ?? 'Failed to fetch stays along route.');
+        setRouteListings([]);
+        setFilteredProperties(mockProperties);
+      } finally {
+        setLoadingRoute(false);
+      }
+    })();
+  }, [bestRoute, selectedRadius]);
+
+  // Filters (logic unchanged—now applied to current list)
+  const applyFilters = () => {
+    // you can refine here using hasParking/hasEvCharging etc. For now, pass-through.
+    setFilteredProperties(routeListings.length ? routeListings : mockProperties);
+    setFilterModalVisible(false);
+  };
   const clearFilters = () => {
     setHasParking(false); setHas24x7Checkin(false); setHasHighwayAccess(false); setHasEvCharging(false);
-    setFilteredProperties(mockProperties);
+    setFilteredProperties(routeListings.length ? routeListings : mockProperties);
+  };
+
+  // Optional infinite scroll loader (not wired to UI, keeps UI unchanged)
+  const loadMoreRoute = async () => {
+    if (routeNext == null || !bestRoute?.coords?.length || loadingRoute) return;
+    setLoadingRoute(true);
+    try {
+      const radiusNum = Number((selectedRadius || '5 km of route').split(' ')[0]);
+      const data = await fetchStaysAlongRoute(bestRoute.coords, radiusNum, routeNext);
+      const mapped: Property[] = (data.results ?? []).map((it: any) => ({
+        id: String(it.id),
+        name: it.title ?? it.name ?? 'Stay',
+        location: it.full_address || it.street || it.city || '—',
+        price: Number(it.price ?? 0),
+        rating: Number(it.rating ?? 0),
+        distanceFromRoute:
+          typeof it.distance_from_route_km === 'number'
+            ? `${it.distance_from_route_km.toFixed(1)} km`
+            : '—',
+        segmentDistance: '',
+        image: it.photo_url ?? 'https://picsum.photos/seed/route/640/480',
+        features: Array.isArray(it.amenities) ? it.amenities : [],
+        routeSegment: 'Along route',
+        coordinates: {
+          latitude: Number(it.coordinates?.latitude ?? it.latitude),
+          longitude: Number(it.coordinates?.longitude ?? it.longitude),
+        },
+      }));
+      setRouteListings(prev => [...prev, ...mapped]);
+      setFilteredProperties(prev => [...prev, ...mapped]);
+      setRouteNext(data.next_cursor ?? null);
+    } finally {
+      setLoadingRoute(false);
+    }
   };
 
   const renderPriceMarker = (price: number) => (
@@ -756,7 +881,8 @@ export default function RoutePlannerPage() {
                   )}
 
                   <MapView ref={mapRef} style={styles.map} provider={PROVIDER_DEFAULT} initialRegion={mockRegion} onRegionChangeComplete={(region) => (regionRef.current = region)} onMapReady={() => mapRef.current?.animateCamera({ pitch: 0, heading: 0 }, { duration: 0 })}>
-                    {mockProperties.map(prop => (
+                    {/* 🔁 USE filteredProperties instead of mockProperties so UI stays identical */}
+                    {filteredProperties.map(prop => (
                       <Marker key={prop.id} coordinate={prop.coordinates}>
                         {renderPriceMarker(prop.price)}
                       </Marker>
@@ -840,6 +966,7 @@ export default function RoutePlannerPage() {
     </ThemedView>
   );
 }
+
 
 
 // --- Styles ---

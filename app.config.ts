@@ -46,11 +46,15 @@ const config: ExpoConfig = {
         dark: { backgroundColor: '#000000' },
       },
     ],
+    "expo-secure-store",
   ],
   experiments: { typedRoutes: true, reactCompiler: true },
   extra: {
     eas: { projectId: process.env.EAS_PROJECT_ID ?? '' },
     GEOAPIFY_API_KEY: process.env.EXPO_PUBLIC_GEOAPIFY_KEY ?? '',
+    extra: {
+      EXPO_PUBLIC_API_BASE_URL: "https://<your-api-id>.execute-api.ap-south-1.amazonaws.com/dev"
+    }
   },
 };
 

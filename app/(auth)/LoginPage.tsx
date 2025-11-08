@@ -21,13 +21,35 @@ import {
 // Social icons
 import { AntDesign, FontAwesome, Ionicons } from '@expo/vector-icons'; // google, apple
 
+// 🔑 Cognito sign-in
+import { signIn } from '@/services/auth';
+import * as SecureStore from 'expo-secure-store';
+
+import 'react-native-get-random-values';
+import 'react-native-url-polyfill/auto';
+
+
 export default function LoginPage() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
 
-  const handleLogin = () => {
-    console.log('Logging in with:', username, password);
-    router.replace('/(tabs)');
+  // 🔄 UPDATED: call Cognito, store tokens + username, then route
+  const handleLogin = async () => {
+    try {
+      if (!username || !password) {
+        Alert.alert('Missing Fields', 'Please enter your username/email and password.');
+        return;
+      }
+      const { idToken} = await signIn({ username, password });
+      // const { idToken, accessToken } = await signIn({ username, password });
+      console.log('[Cognito ID Token]', idToken); 
+      await SecureStore.setItemAsync('idToken', idToken);
+      // await SecureStore.setItemAsync('accessToken', accessToken); 
+      await SecureStore.setItemAsync('username', username); // <-- store for phone OTP flow
+      router.replace('/(tabs)');
+    } catch (err: any) {
+      Alert.alert('Login failed', err?.message ?? 'Please try again.');
+    }
   };
 
   const handleCreateAccount = () => {
@@ -100,7 +122,7 @@ export default function LoginPage() {
         {/* Social logins */}
         <View style={local.socialWrap}>
           <SocialButton
-            onPress={() => Alert.alert('Google Sign-In', 'Hook up OAuth or Cognito later')}
+            onPress={() => Alert.alert('Google Sign-In', 'Hook up OAuth or Cognito Hosted UI later')}
             icon={<AntDesign name="google" size={20} color="#111827" />}
             label="Continue with Google"
           />

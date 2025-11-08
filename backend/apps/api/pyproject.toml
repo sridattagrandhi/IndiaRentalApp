@@ -1,0 +1,24 @@
+[tool.poetry]
+name = "api"
+version = "0.1.0"
+description = "IndiaRental FastAPI backend"
+authors = ["you"]
+packages = [{ include = "api", from = "src" }]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = "^0.114"
+uvicorn = "^0.30"
+httpx = "^0.27"
+python-jose = {version="^3.3", extras=["cryptography"]}
+python-dotenv = "^1.0"
+mangum = "^0.17"     # for AWS Lambda later
+alembic = "^1.17.1"
+boto3 = "^1.40.65"
+
+[tool.poetry.group.dev.dependencies]
+ruff = "^0.6"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

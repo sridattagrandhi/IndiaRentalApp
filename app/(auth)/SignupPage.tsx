@@ -7,8 +7,12 @@ import SocialButton from '@/components/ui/socialButton';
 import { styles } from '@/styles/signup.styles';
 import { FontAwesome } from '@expo/vector-icons';
 import { Link, router } from 'expo-router';
+import * as SecureStore from 'expo-secure-store';
 import React, { useState } from 'react';
 import { Alert, ScrollView, Text, View } from 'react-native';
+
+// 🆕 call Cognito signUp
+import { signUpEmail } from '@/services/auth';
 
 export default function SignupPage() {
   const [email, setEmail] = useState('');
@@ -16,7 +20,7 @@ export default function SignupPage() {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
 
-  const handleSignup = () => {
+  const handleSignup = async () => {
     // 1. Check if any fields are empty
     if (!email || !username || !password || !confirmPassword) {
       Alert.alert('Missing Fields', 'Please fill in all fields.');
@@ -30,22 +34,12 @@ export default function SignupPage() {
     }
     
     // 3. Password Criteria Validation
-    const errors = [];
-    if (password.length < 8) {
-      errors.push('be at least 8 characters long');
-    }
-    if (!/[a-z]/.test(password)) {
-      errors.push('contain at least one lowercase letter');
-    }
-    if (!/[A-Z]/.test(password)) {
-      errors.push('contain at least one uppercase letter');
-    }
-    if (!/\d/.test(password)) {
-      errors.push('contain at least one number');
-    }
-    if (!/[!@#$%^&*(),.?":{}|<>_]/.test(password)) {
-      errors.push('contain at least one special character');
-    }
+    const errors: string[] = [];
+    if (password.length < 8) errors.push('be at least 8 characters long');
+    if (!/[a-z]/.test(password)) errors.push('contain at least one lowercase letter');
+    if (!/[A-Z]/.test(password)) errors.push('contain at least one uppercase letter');
+    if (!/\d/.test(password)) errors.push('contain at least one number');
+    if (!/[!@#$%^&*(),.?":{}|<>_]/.test(password)) errors.push('contain at least one special character');
 
     if (errors.length > 0) {
       const errorMessage = "Password must:\n\n" + errors.map(err => `• ${err}`).join('\n');
@@ -53,25 +47,27 @@ export default function SignupPage() {
       return;
     }
 
-    // If all checks pass, proceed to EMAIL verification
-    console.log('Signup details validated. Proceeding to email OTP for:', email);
-    
-    // --- UPDATED NAVIGATION ---
-    // Navigate to the OTP page, passing the 'type' and 'value'
-    router.push({
-      pathname: '/(auth)/OTPVerification',
-      params: { type: 'email', value: email }
-    });
+    await SecureStore.setItemAsync('pendingEmail', email);
+    await SecureStore.setItemAsync('pendingPassword', password);
+    await SecureStore.setItemAsync('pendingUsername', username);
+
+    try {
+      // 🆕 Create user in Cognito
+      await signUpEmail({ username, password, email });
+
+      // ➡️ Navigate to email OTP screen, pass username so we can confirm it there
+      router.push({
+        pathname: '/(auth)/OTPVerification',
+        params: { type: 'email', value: email, username },
+      });
+    } catch (err: any) {
+      Alert.alert('Sign up failed', err?.message ?? 'Please try again.');
+    }
   };
 
   const handleSocialSignup = (provider: string) => {
     Alert.alert('Social Signup', `Continue with ${provider}`);
-    // TODO: Add logic for Google/Apple sign-in
-    // On success, you would also navigate to the OTP email verification
-    // router.push({
-    //   pathname: '/(auth)/OTPVerification',
-    //   params: { type: 'email', value: 'user_social_email@gmail.com' }
-    // });
+    // Hosted UI will be wired later
   };
 
   return (
@@ -83,31 +79,11 @@ export default function SignupPage() {
           subtitle="Sign up to get started"
         />
 
-        <SocialButton
-          title="Continue with Google"
-          icon="logo-google"
-          onPress={() => handleSocialSignup('Google')}
-        />
-        <SocialButton
-          title="Continue with Apple"
-          icon="logo-apple"
-          onPress={() => handleSocialSignup('Apple')}
-        />
-        <SocialButton
-          title="Continue with Facebook"
-          icon="logo-facebook" // Assumes Ionicons
-          onPress={() => handleSocialSignup('Facebook')}
-        />
-        <SocialButton
-          title="Continue with Instagram"
-          icon="logo-instagram" // Assumes Ionicons
-          onPress={() => handleSocialSignup('Instagram')}
-        />
-        <SocialButton
-          title="Continue with WhatsApp"
-          icon="logo-whatsapp" // Assumes Ionicons
-          onPress={() => handleSocialSignup('WhatsApp')}
-        />
+        <SocialButton title="Continue with Google"   icon="logo-google"   onPress={() => handleSocialSignup('Google')} />
+        <SocialButton title="Continue with Apple"    icon="logo-apple"    onPress={() => handleSocialSignup('Apple')} />
+        <SocialButton title="Continue with Facebook" icon="logo-facebook" onPress={() => handleSocialSignup('Facebook')} />
+        <SocialButton title="Continue with Instagram" icon="logo-instagram" onPress={() => handleSocialSignup('Instagram')} />
+        <SocialButton title="Continue with WhatsApp" icon="logo-whatsapp" onPress={() => handleSocialSignup('WhatsApp')} />
 
         <View style={styles.dividerContainer}>
           <View style={styles.dividerLine} />

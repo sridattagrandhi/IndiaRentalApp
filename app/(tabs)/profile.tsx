@@ -1,5 +1,7 @@
 // app/(tabs)/profile.tsx
+import Constants from 'expo-constants';
 import { Href, Link, Stack, useRouter } from 'expo-router'; // useRouter is imported
+import * as SecureStore from 'expo-secure-store';
 import {
   AlertCircle,
   Bell,
@@ -15,7 +17,7 @@ import {
   LogOut,
   Shield
 } from 'lucide-react-native';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Alert, Image, SafeAreaView, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 // Helper component for Settings items
@@ -50,16 +52,43 @@ export default function ProfileScreen() {
   const [userRole, setUserRole] = useState<'guest' | 'host'>('guest');
 
   // Mock user data (adapt as needed)
-  const userData = {
-    name: 'Priya Sharma',
-    email: 'priya.sharma@example.com',
-    phone: '+91 98765 43210',
+  const [userData, setUserData] = useState({
+    name: '',
+    email: '',
+    phone: '',
     avatar: 'https://i.pravatar.cc/150?img=9',
     isVerified: false,
     kycStatus: 'incomplete' as 'incomplete' | 'pending' | 'verified',
     bankVerified: false,
     propertyVerified: false
-  };
+  });
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const token = await SecureStore.getItemAsync('idToken'); // whichever you pass to API Gateway
+        const res = await fetch(`${Constants.expoConfig?.extra?.API_URL}/v1/profile`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) throw new Error('Failed to load profile');
+        const p = await res.json();
+
+        setUserData((prev) => ({
+          ...prev,
+          name: p.name || 'User',
+          email: p.email || '—',
+          phone: p.phone || '—',
+          avatar: p.avatar_url || prev.avatar,
+          isVerified: false,           // keep your existing flags for now
+          kycStatus: 'incomplete',
+          bankVerified: false,
+          propertyVerified: false,
+        }));
+      } catch (e) {
+        // You can show a toast or fallback silently
+      }
+    })();
+  }, []);
 
   const handleSignOut = () => {
     Alert.alert('Sign out?', 'Are you sure you want to sign out?', [
