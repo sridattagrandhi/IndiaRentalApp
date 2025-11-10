@@ -3,7 +3,7 @@ import { ThemedView } from '@/components/themed-view';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { format, parseISO } from 'date-fns';
 import { Image } from 'expo-image';
-import { Stack, useRouter } from 'expo-router';
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import {
   ArrowLeft,
@@ -46,12 +46,13 @@ import {
 import { CalendarList, DateData } from 'react-native-calendars';
 import MapView, { Marker, PROVIDER_DEFAULT, Region } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useListings } from './context/ListingsContext';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const WISHLISTS_KEY = '@wishlists';
 const SAVED_PROPERTIES_KEY = '@saved_properties';
 
-// ⬇️ ADDED: types + tiny storage helpers
+// Types + storage helpers
 type Wishlist = { id: string; name: string; description?: string; count: number; coverImage?: string };
 type SavedProperty = {
   id: string;
@@ -69,8 +70,8 @@ async function getData<T>(key: string, fallback: T): Promise<T> {
 }
 async function setData<T>(key: string, value: T) { await AsyncStorage.setItem(key, JSON.stringify(value)); }
 
-// ----- Mock data (same as before) -----
-const listing = {
+// ----- Mock data (kept for payload fallback) -----
+const DEFAULT_LISTING = {
   id: '1',
   name: 'Modern Studio in Koramangala',
   locality: 'Koramangala 5th Block, Bangalore',
@@ -110,6 +111,7 @@ const listing = {
     { name: 'Security', icon: Shield },
   ],
   houseRules: ['No smoking', 'No parties or events', 'Suitable for children', 'No pets'],
+  prohibited: ['Illegal substances', 'Unregistered guests'], // shown in “Not allowed”
   checkInWindow: '2:00 PM - 11:00 PM',
   checkOutTime: '11:00 AM',
   safetyFeatures: [
@@ -148,7 +150,91 @@ const listing = {
   taxNote: 'Includes all taxes',
 };
 
-// ----- Date picker modal (unchanged) -----
+// Map common amenity names to lucide icons
+const AMENITY_ICON_MAP: Record<string, React.ComponentType<{ size: number; color: string }>> = {
+  wifi: Wifi,
+  'wi-fi': Wifi,
+  ac: Wind,
+  'air conditioning': Wind,
+  parking: ParkingCircle,
+  tv: Tv,
+  television: Tv,
+  kitchen: Utensils,
+  coffee: Coffee,
+  'late check-in': Clock,
+  security: Shield,
+};
+type Amenity = { name: string; icon?: React.ComponentType<{ size: number; color: string }> };
+
+function useListingFromParams() {
+  const params = useLocalSearchParams<{ id?: string; source?: string; payload?: string }>();
+  const { listings } = useListings();
+
+  // Host listing by id
+  if (params.source === 'host' && params.id) {
+    const l = listings.find(x => x.id === params.id);
+    if (l) {
+      return {
+        id: l.id,
+        name: l.title,
+        locality: l.address ? `${l.address}, ${l.location}` : l.location,
+        rating: l.rating ?? 0,
+        reviewsCount: l.reviewCount ?? 0,
+        price: l.pricePerNight,
+        coordinates: l.coords ? { latitude: l.coords.latitude, longitude: l.coords.longitude } : undefined,
+        images: l.images?.length ? l.images : [l.image],
+        thumbnails: l.images?.length ? l.images : [l.image],
+        highlights: ['Hosted stay'],
+        amenities: (l.amenities ?? []).map(n => ({ name: n })),
+        houseRules: l.rules ?? [],
+        prohibited: l.prohibited ?? [],
+        safetyFeatures: [],
+        host: { name: 'Host', image: '', languages: [], responseTime: '', responseRate: '', verified: true },
+        reviews: [],
+        distanceFromSearch: '',
+        instantBook: false,
+        taxNote: '',
+        __calendar: l.calendar ?? {}, // for disabling dates
+        __maxGuests: l.maxGuests ?? 20, 
+      };
+    }
+  }
+
+  // Mock payload path (cards)
+  if (params.payload) {
+    try {
+      const raw = typeof params.payload === 'string' ? decodeURIComponent(params.payload) : params.payload;
+      const p = JSON.parse(raw as string);
+      return {
+        id: p.id,
+        name: p.name,
+        locality: p.location,
+        rating: p.rating ?? 0,
+        reviewsCount: p.reviewsCount ?? 0,
+        price: p.price,
+        coordinates: p.coordinates,
+        images: Array.isArray(p.images) && p.images.length ? p.images : [p.image],
+        thumbnails: Array.isArray(p.images) && p.images.length ? p.images : [p.image],
+        highlights: p.highlights ?? ['Great location'],
+        amenities: (p.features ?? []).map((name: string) => ({ name })),
+        houseRules: p.rules ?? [],
+        prohibited: p.prohibited ?? [],
+        checkInWindow: p.checkInWindow ?? '2:00 PM - 11:00 PM',
+        checkOutTime: p.checkOutTime ?? '11:00 AM',
+        safetyFeatures: p.safetyFeatures ?? [],
+        host: p.host ?? { name: 'Host', image: '', languages: [], responseTime: '', responseRate: '', verified: true },
+        reviews: p.reviews ?? [],
+        distanceFromSearch: p.distance ?? '',
+        instantBook: !!p.instantBook,
+        taxNote: p.taxNote ?? '',
+      };
+    } catch {}
+  }
+
+  return null;
+}
+
+// ----- Date picker modal (blocks disabled days & colors them grey) -----
 interface DatePickerModalProps {
   isVisible: boolean;
   onClose: () => void;
@@ -156,6 +242,7 @@ interface DatePickerModalProps {
   checkOut: string | null;
   setCheckIn: (date: string | null) => void;
   setCheckOut: (date: string | null) => void;
+  disabledDates?: Set<string>;
 }
 function DatePickerModal({
   isVisible,
@@ -164,6 +251,7 @@ function DatePickerModal({
   checkOut,
   setCheckIn,
   setCheckOut,
+  disabledDates
 }: DatePickerModalProps) {
   const [selectedStartDate, setSelectedStartDate] = useState<string | null>(checkIn);
   const [selectedEndDate, setSelectedEndDate] = useState<string | null>(checkOut);
@@ -176,6 +264,7 @@ function DatePickerModal({
   }, [isVisible, checkIn, checkOut]);
 
   const handleDayPress = (day: DateData) => {
+    if (disabledDates?.has(day.dateString)) return; // <- hard block
     if (
       selectingPhase === 'start' ||
       (selectedStartDate && selectedEndDate && day.dateString < selectedStartDate!)
@@ -199,7 +288,11 @@ function DatePickerModal({
     onClose();
   };
 
+  // Marking map: disabled (grey + untappable) + selected period
   const markedDates: { [date: string]: any } = {};
+  disabledDates?.forEach(iso => {
+    markedDates[iso] = { disabled: true, disableTouchEvent: true, textColor: '#9CA3AF' };
+  });
   if (selectedStartDate) {
     markedDates[selectedStartDate] = { startingDay: true, color: '#111827', textColor: 'white' };
   }
@@ -211,11 +304,11 @@ function DatePickerModal({
       currentDate.setDate(currentDate.getDate() + 1);
       while (currentDate < endDate) {
         const dateString = currentDate.toISOString().split('T')[0];
-        markedDates[dateString] = { color: '#F3F4F6', textColor: '#111827' };
+        if (!markedDates[dateString]?.disabled) {
+          markedDates[dateString] = { color: '#F3F4F6', textColor: '#111827' };
+        }
         currentDate.setDate(currentDate.getDate() + 1);
       }
-      markedDates[selectedStartDate] = { ...markedDates[selectedStartDate], color: '#111827', textColor: 'white' };
-      markedDates[selectedEndDate] = { ...markedDates[selectedEndDate], color: '#111827', textColor: 'white' };
     } else if (selectedStartDate === selectedEndDate) {
       markedDates[selectedStartDate] = { startingDay: true, endingDay: true, color: '#111827', textColor: 'white' };
     }
@@ -226,7 +319,7 @@ function DatePickerModal({
       <View style={styles.modalContainer}>
         <View style={styles.modalHeader}>
           <Text style={styles.modalTitle}>Select Dates</Text>
-          <TouchableOpacity onPress={onClose} style={styles.modalCloseButton}>
+          <TouchableOpacity onPress={onClose} style={styles.modalCloseButton} hitSlop={{top:12,bottom:12,left:12,right:12}}>
             <X size={24} color="#111827" />
           </TouchableOpacity>
         </View>
@@ -235,7 +328,7 @@ function DatePickerModal({
             current={selectedStartDate || new Date().toISOString().split('T')[0]}
             minDate={new Date().toISOString().split('T')[0]}
             onDayPress={handleDayPress}
-            markingType={'period'}
+            markingType="period"
             markedDates={markedDates}
             pastScrollRange={0}
             futureScrollRange={12}
@@ -249,7 +342,7 @@ function DatePickerModal({
               selectedDayTextColor: '#FFFFFF',
               todayTextColor: '#DC2626',
               dayTextColor: '#111827',
-              textDisabledColor: '#D1D5DB',
+              textDisabledColor: '#9CA3AF', // <- grey disabled day numbers
             }}
           />
         </View>
@@ -279,8 +372,9 @@ function DatePickerModal({
 
 export default function ListingDetailsPage() {
   const router = useRouter();
-  const { top, bottom } = useSafeAreaInsets();
   const insets = useSafeAreaInsets();
+  const { bottom } = insets;
+
   const [isFavorite, setIsFavorite] = useState(false);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const imageCarouselRef = useRef<FlatList>(null);
@@ -290,14 +384,26 @@ export default function ListingDetailsPage() {
   const [guests, setGuests] = useState(2);
   const [isDatePickerVisible, setDatePickerVisible] = useState(false);
 
-  // ⬇️ ADDED: wishlist picker state
+  // wishlist picker
   const [wishlists, setWishlists] = useState<Wishlist[]>([]);
   const [pickerVisible, setPickerVisible] = useState(false);
   const [creatingNew, setCreatingNew] = useState(false);
   const [newListName, setNewListName] = useState('');
   const [newListDesc, setNewListDesc] = useState('');
 
-  // ⬇️ ADDED: load lists + check if saved anywhere
+  const dynamicListing = useListingFromParams();
+  const listing = dynamicListing ?? DEFAULT_LISTING;
+  const maxGuests = (dynamicListing as any)?.__maxGuests ?? 20; 
+
+  // Build disabled set from host calendar
+  const disabledDates = new Set<string>();
+  const cal = (dynamicListing as any)?.__calendar as Record<string, { status: string }> | undefined;
+  if (cal) {
+    Object.entries(cal).forEach(([iso, cell]) => {
+      if (cell?.status === 'booked' || cell?.status === 'blocked') disabledDates.add(iso);
+    });
+  }
+
   useEffect(() => {
     (async () => {
       const lists = await getData<Wishlist[]>(WISHLISTS_KEY, []);
@@ -307,12 +413,14 @@ export default function ListingDetailsPage() {
     })();
   }, []);
 
-  const mapRegion: Region = {
-    latitude: listing.coordinates.latitude,
-    longitude: listing.coordinates.longitude,
-    latitudeDelta: 0.01,
-    longitudeDelta: 0.01,
-  };
+  const mapRegion: Region | null = listing?.coordinates
+    ? {
+        latitude: listing.coordinates.latitude,
+        longitude: listing.coordinates.longitude,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+      }
+    : null;
 
   const onCarouselViewableItemsChanged = useRef(({ viewableItems }: any) => {
     if (viewableItems.length > 0) setCurrentImageIndex(viewableItems[0].index);
@@ -323,7 +431,6 @@ export default function ListingDetailsPage() {
     const newIndex = direction === 'next' ? (currentImageIndex + 1) % len : (currentImageIndex - 1 + len) % len;
     imageCarouselRef.current?.scrollToIndex({ index: newIndex, animated: true });
   };
-
   const scrollToThumbnail = (i: number) => imageCarouselRef.current?.scrollToIndex({ index: i, animated: true });
 
   const displayDates = () => {
@@ -332,7 +439,6 @@ export default function ListingDetailsPage() {
     return 'Select dates';
   };
 
-  // ⬇️ ADDED: save helpers
   async function saveToWishlist(targetListId: string) {
     const saved = await getData<SavedProperty[]>(SAVED_PROPERTIES_KEY, []);
     const already = saved.some(p => p.id === listing.id && p.listId === targetListId);
@@ -378,29 +484,21 @@ export default function ListingDetailsPage() {
     await saveToWishlist(newList.id);
   }
 
-  // Header height (white bar below the iOS status area)
   const headerBarHeight = 56;
 
   return (
     <ThemedView style={styles.container}>
-      {/* Keep status bar visible; look white on both platforms */}
       <StatusBar style="dark" backgroundColor="#ffffff" />
-
       <Stack.Screen options={{ headerShown: false }} />
 
-      {/* Fixed white header (pushes image down) */}
+      {/* Fixed header */}
       <View style={[styles.headerContainer, { paddingTop: insets.top, height: insets.top + headerBarHeight }]}>
         <View style={styles.headerRow}>
           <TouchableOpacity onPress={() => router.back()} style={styles.headerIconButton}>
             <ArrowLeft size={20} color="#111827" />
           </TouchableOpacity>
-
           <View style={styles.headerRightRow}>
-            {/* ⬇️ CHANGED: open wishlist picker instead of just toggling */}
-            <TouchableOpacity
-              onPress={() => setPickerVisible(true)}
-              style={styles.headerIconButton}
-            >
+            <TouchableOpacity onPress={() => setPickerVisible(true)} style={styles.headerIconButton}>
               <Heart size={20} color="#111827" fill={isFavorite ? '#ef4444' : 'transparent'} />
             </TouchableOpacity>
             <TouchableOpacity style={styles.headerIconButton}>
@@ -411,10 +509,9 @@ export default function ListingDetailsPage() {
       </View>
 
       <ScrollView contentContainerStyle={{ paddingBottom: 100 }}>
-        {/* Spacer to account for the fixed header so content starts below it */}
         <View style={{ height: insets.top + headerBarHeight }} />
 
-        {/* IMAGE CAROUSEL (now sits below the header) */}
+        {/* IMAGE CAROUSEL */}
         <View style={styles.imageCarouselContainer}>
           <FlatList
             ref={imageCarouselRef}
@@ -428,38 +525,29 @@ export default function ListingDetailsPage() {
             viewabilityConfig={{ itemVisiblePercentThreshold: 50 }}
           />
 
-          {/* Instant Book pill on the image */}
           {listing.instantBook && (
             <View style={[styles.instantBadge, { top: 16, left: 16 }]}>
               <Text style={styles.instantBadgeText}>Instant Book</Text>
             </View>
           )}
 
-          {/* Bottom-right counter */}
           <View style={styles.imageCounter}>
             <Text style={styles.imageCounterText}>
               {currentImageIndex + 1} / {listing.images.length}
             </Text>
           </View>
 
-          {/* Centered carousel arrows */}
-          <TouchableOpacity
-            style={[styles.carouselNav, styles.carouselNavLeft]}
-            onPress={() => scrollCarousel('prev')}
-          >
+          <TouchableOpacity style={[styles.carouselNav, styles.carouselNavLeft]} onPress={() => scrollCarousel('prev')}>
             <ChevronLeft size={22} color="#111827" />
           </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.carouselNav, styles.carouselNavRight]}
-            onPress={() => scrollCarousel('next')}
-          >
+          <TouchableOpacity style={[styles.carouselNav, styles.carouselNavRight]} onPress={() => scrollCarousel('next')}>
             <ChevronRight size={22} color="#111827" />
           </TouchableOpacity>
         </View>
 
         {/* THUMBNAILS */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.thumbnailContainer}>
-          {listing.thumbnails.map((thumb, index) => (
+          {listing.thumbnails.map((thumb: string, index: number) => (
             <TouchableOpacity key={index} onPress={() => scrollToThumbnail(index)}>
               <Image
                 source={{ uri: thumb }}
@@ -488,15 +576,19 @@ export default function ListingDetailsPage() {
             <View style={styles.priceRow}>
               <Text style={styles.priceText}>₹{listing.price.toLocaleString('en-IN')}</Text>
               <Text style={styles.priceNight}>/night</Text>
-              <View style={styles.taxBadge}>
-                <Text style={styles.taxBadgeText}>{listing.taxNote}</Text>
-              </View>
+              {!!listing.taxNote && (
+                <View style={styles.taxBadge}>
+                  <Text style={styles.taxBadgeText}>{listing.taxNote}</Text>
+                </View>
+              )}
             </View>
 
             <TouchableOpacity style={styles.dateButton} onPress={() => setDatePickerVisible(true)}>
               <CalendarIcon size={20} color="#374151" />
               <Text style={[styles.dateButtonText, !checkInDate && { color: '#6B7280' }]}>
-                {displayDates()}
+                {checkInDate && checkOutDate
+                  ? `${format(parseISO(checkInDate), 'MMM dd')} - ${format(parseISO(checkOutDate), 'MMM dd')}`
+                  : 'Select dates'}
               </Text>
             </TouchableOpacity>
 
@@ -510,13 +602,15 @@ export default function ListingDetailsPage() {
                 >
                   <Minus size={20} color={guests <= 1 ? '#9CA3AF' : '#111827'} />
                 </TouchableOpacity>
+
                 <Text style={styles.guestCount}>{guests}</Text>
+
                 <TouchableOpacity
-                  style={[styles.guestButton, guests >= 20 && styles.guestButtonDisabled]}
-                  onPress={() => setGuests((g) => Math.min(20, g + 1))}
-                  disabled={guests >= 20}
+                  style={[styles.guestButton, guests >= maxGuests && styles.guestButtonDisabled]}  // ← NEW
+                  onPress={() => setGuests((g) => Math.min(maxGuests, g + 1))}                     // ← NEW
+                  disabled={guests >= maxGuests}                                                   // ← NEW
                 >
-                  <Plus size={20} color={guests >= 20 ? '#9CA3AF' : '#111827'} />
+                  <Plus size={20} color={guests >= maxGuests ? '#9CA3AF' : '#111827'} />
                 </TouchableOpacity>
               </View>
             </View>
@@ -526,7 +620,7 @@ export default function ListingDetailsPage() {
 
           <Text style={styles.sectionTitle}>What this place offers</Text>
           <View style={styles.highlightsContainer}>
-            {listing.highlights.map((item, index) => (
+            {listing.highlights.map((item: string, index: number) => (
               <View key={index} style={styles.highlightItem}>
                 <CheckCircle2 size={20} color="#10B981" />
                 <Text style={styles.highlightText}>{item}</Text>
@@ -538,12 +632,16 @@ export default function ListingDetailsPage() {
 
           <Text style={styles.sectionTitle}>Amenities</Text>
           <View style={styles.amenitiesContainer}>
-            {listing.amenities.map((item, index) => (
-              <View key={index} style={styles.amenityItem}>
-                <item.icon size={24} color="#374151" />
-                <Text style={styles.amenityText}>{item.name}</Text>
-              </View>
-            ))}
+            {listing.amenities.map((item: Amenity, index: number) => {
+              const key = (item.name || '').toLowerCase();
+              const Icon = item.icon ?? AMENITY_ICON_MAP[key] ?? CheckCircle2;
+              return (
+                <View key={index} style={styles.amenityItem}>
+                  <Icon size={24} color="#374151" />
+                  <Text style={styles.amenityText}>{item.name}</Text>
+                </View>
+              );
+            })}
           </View>
 
           <View style={styles.divider} />
@@ -566,11 +664,14 @@ export default function ListingDetailsPage() {
               </View>
             </View>
 
-            <Text style={styles.ruleSubTitle}>Rules</Text>
-            {listing.houseRules.map((rule, index) => (
-              <Text key={index} style={styles.ruleList}>
-                • {rule}
-              </Text>
+            {!!listing.houseRules?.length && <Text style={styles.ruleSubTitle}>Rules</Text>}
+            {listing.houseRules.map((rule: string, index: number) => (
+              <Text key={index} style={styles.ruleList}>• {rule}</Text>
+            ))}
+
+            {!!(listing as any).prohibited?.length && <Text style={[styles.ruleSubTitle, { marginTop: 12 }]}>Not allowed</Text>}
+            {((listing as any).prohibited ?? []).map((item: string, i: number) => (
+              <Text key={`na-${i}`} style={[styles.ruleList, { color: '#B91C1C' }]}>• {item}</Text>
             ))}
           </View>
 
@@ -578,17 +679,19 @@ export default function ListingDetailsPage() {
 
           <Text style={styles.sectionTitle}>Location</Text>
           <View style={styles.locationCard}>
-            <MapView
-              style={styles.map}
-              provider={PROVIDER_DEFAULT}
-              initialRegion={mapRegion}
-              scrollEnabled={false}
-              zoomEnabled={false}
-              pitchEnabled={false}
-              rotateEnabled={false}
-            >
-              <Marker coordinate={listing.coordinates} />
-            </MapView>
+            {mapRegion && (
+              <MapView
+                style={styles.map}
+                provider={PROVIDER_DEFAULT}
+                initialRegion={mapRegion}
+                scrollEnabled={false}
+                zoomEnabled={false}
+                pitchEnabled={false}
+                rotateEnabled={false}
+              >
+                <Marker coordinate={listing.coordinates!} />
+              </MapView>
+            )}
             <Text style={styles.locationText}>{listing.locality}</Text>
             <Text style={styles.locationDistance}>{listing.distanceFromSearch}</Text>
           </View>
@@ -597,7 +700,7 @@ export default function ListingDetailsPage() {
 
           <Text style={styles.sectionTitle}>Safety & Verification</Text>
           <View style={styles.safetyContainer}>
-            {listing.safetyFeatures.map((item, index) => (
+            {listing.safetyFeatures.map((item: string, index: number) => (
               <View key={index} style={styles.safetyBadge}>
                 <Shield size={16} color="#374151" />
                 <Text style={styles.safetyBadgeText}>{item}</Text>
@@ -634,7 +737,7 @@ export default function ListingDetailsPage() {
 
           <Text style={styles.sectionTitle}>Reviews</Text>
           <View style={styles.reviewCardContainer}>
-            {listing.reviews.map((review) => (
+            {listing.reviews.map((review: { id: string; author: string; rating: number; comment: string; date: string }) => (
               <View key={review.id} style={styles.reviewCard}>
                 <View style={styles.reviewAuthorRow}>
                   <View style={styles.reviewAvatar}>
@@ -643,16 +746,14 @@ export default function ListingDetailsPage() {
                   <View>
                     <Text style={styles.reviewAuthor}>{review.author}</Text>
                     <View style={styles.starRating}>
-                      {Array(5)
-                        .fill(0)
-                        .map((_, i) => (
-                          <Star
-                            key={i}
-                            size={14}
-                            color={i < review.rating ? '#F59E0B' : '#D1D5DB'}
-                            fill={i < review.rating ? '#F59E0B' : 'transparent'}
-                          />
-                        ))}
+                      {Array(5).fill(0).map((_, i) => (
+                        <Star
+                          key={i}
+                          size={14}
+                          color={i < review.rating ? '#F59E0B' : '#D1D5DB'}
+                          fill={i < review.rating ? '#F59E0B' : 'transparent'}
+                        />
+                      ))}
                     </View>
                   </View>
                   <Text style={styles.reviewDate}>{review.date}</Text>
@@ -671,28 +772,35 @@ export default function ListingDetailsPage() {
       {/* Sticky Footer */}
       <View style={[styles.footer, { paddingBottom: bottom + 10 }]}>
         <View>
-          <Text style={styles.footerPrice}>₹{listing.price.toLocaleString('en-IN')}<Text style={styles.footerPriceNight}> /night</Text></Text>
+          <Text style={styles.footerPrice}>
+            ₹{listing.price.toLocaleString('en-IN')}<Text style={styles.footerPriceNight}> /night</Text>
+          </Text>
         </View>
-        <TouchableOpacity 
-          style={[styles.reserveButton, (!checkInDate || !checkOutDate) && styles.disabledButton]} 
+        <TouchableOpacity
+          style={[styles.reserveButton, (!checkInDate || !checkOutDate) && styles.disabledButton]}
           disabled={!checkInDate || !checkOutDate}
           onPress={() => {
             if (!checkInDate || !checkOutDate) {
               Alert.alert("Missing Dates", "Please select your check-in and check-out dates first.");
               return;
             }
+            if (!listing.coordinates) {
+              Alert.alert("Missing location", "This listing has no map coordinates yet.");
+              return;
+            }
             router.push({
               pathname: '/booking',
-              params: { 
-                listingId: listing.id,
+              params: {
+                listingId: String(listing.id),
                 listingName: listing.name,
-                listingLocation: listing.locality,
-                basePrice: listing.price,
-                checkIn: checkInDate,
-                checkOut: checkOutDate,
-                guests: guests,
-                lat: listing.coordinates.latitude,
-                lon: listing.coordinates.longitude,
+                listingLocation: listing.locality,           // city/area
+                //listingAddress: listing.locality ?? '',      // Using locality as address
+                basePrice: String(listing.price),
+                checkIn: String(checkInDate),
+                checkOut: String(checkOutDate),
+                guests: String(guests),
+                lat: String(listing.coordinates?.latitude ?? 12.9716),
+                lon: String(listing.coordinates?.longitude ?? 77.5946),
               }
             });
           }}
@@ -701,18 +809,9 @@ export default function ListingDetailsPage() {
         </TouchableOpacity>
       </View>
 
-      {/* ⬇️ ADDED: Wishlist Picker Modal */}
-      <Modal
-        visible={pickerVisible}
-        animationType="fade"
-        transparent
-        onRequestClose={() => setPickerVisible(false)}
-      >
-        <TouchableOpacity
-          activeOpacity={1}
-          onPress={() => setPickerVisible(false)}
-          style={styles.wlOverlay}
-        >
+      {/* Wishlist Picker */}
+      <Modal visible={pickerVisible} animationType="fade" transparent onRequestClose={() => setPickerVisible(false)}>
+        <TouchableOpacity activeOpacity={1} onPress={() => setPickerVisible(false)} style={styles.wlOverlay}>
           <TouchableOpacity activeOpacity={1} style={styles.wlSheet}>
             <View style={styles.wlHeader}>
               <Text style={styles.wlTitle}>Add to a list</Text>
@@ -774,6 +873,7 @@ export default function ListingDetailsPage() {
         checkOut={checkOutDate}
         setCheckIn={setCheckInDate}
         setCheckOut={setCheckOutDate}
+        disabledDates={disabledDates}
       />
     </ThemedView>
   );
@@ -783,94 +883,38 @@ export default function ListingDetailsPage() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFFFFF' },
 
-  // --- New fixed header ---
-  headerContainer: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: '#FFFFFF',
-    zIndex: 20,
-  },
+  // Fixed header
+  headerContainer: { position: 'absolute', top: 0, left: 0, right: 0, backgroundColor: '#FFFFFF', zIndex: 20 },
   headerRow: {
-    height: 56,
-    paddingHorizontal: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    height: 56, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
   },
-  headerRightRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
+  headerRightRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   headerIconButton: {
-    width: 36,
-    height: 36,
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 2,
+    width: 36, height: 36, justifyContent: 'center', alignItems: 'center',
+    shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 2,
   },
 
-  imageCarouselContainer: {
-    width: SCREEN_WIDTH,
-    height: SCREEN_WIDTH * 0.8,
-  },
+  imageCarouselContainer: { width: SCREEN_WIDTH, height: SCREEN_WIDTH * 0.8 },
   carouselImage: { width: SCREEN_WIDTH, height: '100%' },
 
-  instantBadge: {
-    position: 'absolute',
-    backgroundColor: '#111827',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
+  instantBadge: { position: 'absolute', backgroundColor: '#111827', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 6 },
   instantBadgeText: { color: 'white', fontSize: 12, fontWeight: 'bold' },
 
   imageCounter: {
-    position: 'absolute',
-    bottom: 16,
-    right: 16,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
+    position: 'absolute', bottom: 16, right: 16, backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4,
   },
   imageCounterText: { color: 'white', fontSize: 12, fontWeight: '500' },
 
   carouselNav: {
-    position: 'absolute',
-    top: '50%',
-    marginTop: -18,
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    justifyContent: 'center',
-    alignItems: 'center',
+    position: 'absolute', top: '50%', marginTop: -18, backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center',
   },
   carouselNavLeft: { left: 16 },
   carouselNavRight: { right: 16 },
 
-  thumbnailContainer: {
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
-  },
-  thumbnail: {
-    width: 64,
-    height: 64,
-    borderRadius: 8,
-    marginRight: 8,
-    borderWidth: 2,
-    borderColor: 'transparent',
-    opacity: 0.6,
-  },
+  thumbnailContainer: { paddingVertical: 8, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: '#E5E7EB' },
+  thumbnail: { width: 64, height: 64, borderRadius: 8, marginRight: 8, borderWidth: 2, borderColor: 'transparent', opacity: 0.6 },
   thumbnailActive: { borderColor: '#111827', opacity: 1 },
 
   contentArea: { padding: 16 },
@@ -881,53 +925,24 @@ const styles = StyleSheet.create({
 
   divider: { height: 1, backgroundColor: '#E5E7EB', marginVertical: 24 },
 
-  card: {
-    backgroundColor: '#F9FAFB',
-    borderRadius: 12,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-  },
+  card: { backgroundColor: '#F9FAFB', borderRadius: 12, padding: 16, borderWidth: 1, borderColor: '#E5E7EB' },
   priceRow: { flexDirection: 'row', alignItems: 'baseline' },
   priceText: { fontSize: 22, fontWeight: 'bold', color: '#111827' },
   priceNight: { fontSize: 14, color: '#4B5563', marginLeft: 4 },
-  taxBadge: {
-    backgroundColor: '#E5E7EB',
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    marginLeft: 'auto',
-  },
+  taxBadge: { backgroundColor: '#E5E7EB', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4, marginLeft: 'auto' },
   taxBadgeText: { fontSize: 12, color: '#374151', fontWeight: '500' },
 
   dateButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'white',
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-    borderRadius: 8,
-    padding: 14,
-    marginTop: 16,
+    flexDirection: 'row', alignItems: 'center', backgroundColor: 'white',
+    borderWidth: 1, borderColor: '#D1D5DB', borderRadius: 8, padding: 14, marginTop: 16,
   },
   dateButtonText: { fontSize: 16, color: '#111827', marginLeft: 12 },
 
-  guestRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 16,
-  },
+  guestRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 16 },
   guestLabel: { fontSize: 16, color: '#111827', fontWeight: '500' },
   guestControl: { flexDirection: 'row', alignItems: 'center' },
   guestButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#B0B0B0',
-    justifyContent: 'center',
-    alignItems: 'center',
+    width: 32, height: 32, borderRadius: 16, borderWidth: 1, borderColor: '#B0B0B0', justifyContent: 'center', alignItems: 'center',
   },
   guestButtonDisabled: { borderColor: '#E5E7EB' },
   guestCount: { fontSize: 16, fontWeight: 'bold', color: '#111827', marginHorizontal: 16 },
@@ -957,24 +972,12 @@ const styles = StyleSheet.create({
 
   safetyContainer: { gap: 12 },
   safetyBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: '#F3F4F6',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-    alignSelf: 'flex-start',
+    flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#F3F4F6',
+    paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, alignSelf: 'flex-start',
   },
   safetyBadgeText: { fontSize: 14, color: '#374151', fontWeight: '500' },
 
-  hostCard: {
-    backgroundColor: '#F9FAFB',
-    borderRadius: 12,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-  },
+  hostCard: { backgroundColor: '#F9FAFB', borderRadius: 12, padding: 16, borderWidth: 1, borderColor: '#E5E7EB' },
   hostHeader: { flexDirection: 'row', gap: 12, marginBottom: 16 },
   hostAvatar: { width: 64, height: 64, borderRadius: 32 },
   hostInfo: { flex: 1, gap: 4 },
@@ -983,153 +986,66 @@ const styles = StyleSheet.create({
   hostDetailRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   hostDetailText: { fontSize: 14, color: '#4B5563' },
   hostMessageButton: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: 'white',
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-    borderRadius: 8,
-    paddingVertical: 12,
+    flexDirection: 'row', justifyContent: 'center', alignItems: 'center',
+    gap: 8, backgroundColor: 'white', borderWidth: 1, borderColor: '#D1D5DB', borderRadius: 8, paddingVertical: 12,
   },
   hostMessageButtonText: { fontSize: 15, fontWeight: 'bold', color: '#111827' },
 
-  reviewsHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
   reviewCardContainer: { gap: 16 },
-  reviewCard: {
-    backgroundColor: '#F9FAFB',
-    borderRadius: 12,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-  },
+  reviewCard: { backgroundColor: '#F9FAFB', borderRadius: 12, padding: 16, borderWidth: 1, borderColor: '#E5E7EB' },
   reviewAuthorRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 8 },
-  reviewAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#E5E7EB',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
+  reviewAvatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#E5E7EB', justifyContent: 'center', alignItems: 'center' },
   reviewAvatarLetter: { fontSize: 18, fontWeight: 'bold', color: '#4B5563' },
   reviewAuthor: { fontSize: 15, fontWeight: 'bold', color: '#111827' },
   starRating: { flexDirection: 'row', gap: 2, marginTop: 2 },
   reviewDate: { fontSize: 13, color: '#6B7280', marginLeft: 'auto' },
   reviewComment: { fontSize: 14, color: '#374151', lineHeight: 20 },
 
-  showAllButton: {
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-    borderRadius: 8,
-    paddingVertical: 12,
-    alignItems: 'center',
-    marginTop: 16,
-  },
+  showAllButton: { borderWidth: 1, borderColor: '#D1D5DB', borderRadius: 8, paddingVertical: 12, alignItems: 'center', marginTop: 16 },
   showAllButtonText: { fontSize: 15, fontWeight: 'bold', color: '#111827' },
 
   footer: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 16,
-    backgroundColor: 'white',
-    borderTopWidth: 1,
-    borderTopColor: '#E5E7EB',
+    position: 'absolute', bottom: 0, left: 0, right: 0, flexDirection: 'row',
+    justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: 'white',
+    borderTopWidth: 1, borderTopColor: '#E5E7EB',
   },
   footerPrice: { fontSize: 18, fontWeight: 'bold', color: '#111827' },
   footerPriceNight: { fontSize: 14, fontWeight: 'normal', color: '#4B5563' },
-  reserveButton: {
-    backgroundColor: '#111827',
-    paddingHorizontal: 24,
-    paddingVertical: 14,
-    borderRadius: 12,
-    flex: 0.6,
-    alignItems: 'center',
-  },
+  reserveButton: { backgroundColor: '#111827', paddingHorizontal: 24, paddingVertical: 14, borderRadius: 12, flex: 0.6, alignItems: 'center' },
   reserveButtonText: { color: 'white', fontSize: 16, fontWeight: 'bold' },
+  disabledButton: { backgroundColor: '#D1D5DB' },
 
+  // Modal/header (calendar)
   modalContainer: { flex: 1, backgroundColor: 'white' },
   modalHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    padding: 16, borderBottomWidth: 1, borderBottomColor: '#E5E7EB', zIndex: 1,
   },
   modalTitle: { fontSize: 18, fontWeight: '600' },
   modalCloseButton: { position: 'absolute', right: 16, top: 16, padding: 4 },
   modalFooter: {
-    flexDirection: 'row',
-    padding: 16,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#E5E7EB',
+    flexDirection: 'row', padding: 16, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#E5E7EB',
   },
   clearButton: {
-    flex: 1,
-    padding: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#F3F4F6',
-    marginRight: 8,
+    flex: 1, padding: 14, borderRadius: 12, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#F3F4F6', marginRight: 8,
   },
   clearButtonText: { fontSize: 16, fontWeight: '600', color: '#111827' },
   showButton: {
-    flex: 2,
-    padding: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#111827',
-    marginLeft: 8,
+    flex: 2, padding: 14, borderRadius: 12, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#111827', marginLeft: 8,
   },
   showButtonText: { fontSize: 16, fontWeight: '600', color: 'white' },
-  disabledButton: { backgroundColor: '#D1D5DB' },
 
-  /* ⬇️ ADD THESE NEW STYLES ONLY */
-  wlOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-  },
-  wlSheet: {
-    width: '100%',
-    maxWidth: 440,
-    backgroundColor: 'white',
-    borderRadius: 12,
-    paddingVertical: 8,
-    overflow: 'hidden',
-  },
-  wlHeader: {
-    padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
-  },
+  // Wishlist picker
+  wlOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center', padding: 24 },
+  wlSheet: { width: '100%', maxWidth: 440, backgroundColor: 'white', borderRadius: 12, paddingVertical: 8, overflow: 'hidden' },
+  wlHeader: { padding: 16, borderBottomWidth: 1, borderBottomColor: '#E5E7EB' },
   wlTitle: { fontSize: 16, fontWeight: '700', color: '#111827' },
   wlSubtitle: { marginTop: 2, fontSize: 13, color: '#6B7280' },
   wlRow: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    borderBottomWidth: 1,
-    borderBottomColor: '#F3F4F6',
+    paddingHorizontal: 16, paddingVertical: 12, flexDirection: 'row',
+    alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderBottomColor: '#F3F4F6',
   },
   wlRowTitle: { fontSize: 15, fontWeight: '600', color: '#111827' },
   wlRowSubtitle: { fontSize: 12, color: '#6B7280' },
@@ -1137,31 +1053,10 @@ const styles = StyleSheet.create({
   wlCreateBtn: { padding: 16, alignItems: 'center' },
   wlCreateBtnText: { fontSize: 15, fontWeight: '600', color: '#111827' },
   wlCreateForm: { padding: 16, gap: 8 },
-  wlInput: {
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 15,
-  },
-  wlFormActions: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 12,
-    marginTop: 4,
-  },
-  wlSecondaryBtn: {
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    backgroundColor: '#F3F4F6',
-    borderRadius: 8,
-  },
+  wlInput: { borderWidth: 1, borderColor: '#D1D5DB', borderRadius: 8, padding: 12, fontSize: 15 },
+  wlFormActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 12, marginTop: 4 },
+  wlSecondaryBtn: { paddingVertical: 10, paddingHorizontal: 14, backgroundColor: '#F3F4F6', borderRadius: 8 },
   wlSecondaryBtnText: { fontWeight: '700', color: '#111827' },
-  wlPrimaryBtn: {
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    backgroundColor: '#111827',
-    borderRadius: 8,
-  },
+  wlPrimaryBtn: { paddingVertical: 10, paddingHorizontal: 14, backgroundColor: '#111827', borderRadius: 8 },
   wlPrimaryBtnText: { fontWeight: '700', color: 'white' },
 });

@@ -2,21 +2,24 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { differenceInDays, format, parseISO } from 'date-fns';
 import * as Clipboard from 'expo-clipboard';
+import * as Print from 'expo-print';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import * as Sharing from 'expo-sharing';
 import { StatusBar } from 'expo-status-bar';
 import {
-    ArrowLeft, Calendar as CalendarIcon, Check, CheckCircle2, Clock, Copy, CreditCard,
-    Download, MapPin, MessageSquare, Minus, Navigation, Phone, Plus, Shield,
-    Smartphone, Users, Wallet, X
+  ArrowLeft, Calendar as CalendarIcon, Check, CheckCircle2, Clock, Copy, CreditCard,
+  Download, MapPin, MessageSquare, Minus, Navigation, Phone, Plus, Shield,
+  Smartphone, Users, Wallet, X
 } from 'lucide-react-native';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
-    Alert, FlatList, Modal, ScrollView, StyleSheet, Text, TextInput,
-    TouchableOpacity, View
+  Alert, FlatList, Modal, ScrollView, StyleSheet, Text, TextInput,
+  TouchableOpacity, View
 } from 'react-native';
 import { CalendarList, DateData } from 'react-native-calendars';
 import MapView, { Marker, PROVIDER_DEFAULT, Region } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useListings } from './context/ListingsContext';
 
 /** ──────────────────────────────────────────────────────────────────────────
  *  STORAGE KEYS (re-using MyTrips list storage)
@@ -175,7 +178,11 @@ function DatePickerModal({
 export default function BookingPage() {
   const router = useRouter();
   const params = useLocalSearchParams();
+  
   const insets = useSafeAreaInsets();
+  const { upsertBooking } = useListings();
+  const [confirmed, setConfirmed] = useState(false);
+  const bookedRef = useRef(false);
 
   // Nav params
   const { listingId, listingName, listingLocation, basePrice, lat, lon } = params;
@@ -224,6 +231,92 @@ export default function BookingPage() {
   const insuranceFeeValue = nights > 0 ? Math.round(subtotal * 0.05) : 0;
   const total = baseTotal + (lateCheckout ? lateCheckoutFeeValue : 0) + (insurance ? insuranceFeeValue : 0);
 
+  async function downloadReceiptNow() {
+    const nightsSafe = Math.max(0, nights);
+    const lineItemsHtml = `
+      <tr><td>Nightly rate</td><td align="right">₹${listingBasePrice.toLocaleString('en-IN')}</td></tr>
+      <tr><td>Nights × ${nightsSafe}</td><td align="right">× ${nightsSafe}</td></tr>
+      <tr><td>Cleaning fee</td><td align="right">₹${cleaningFee.toLocaleString('en-IN')}</td></tr>
+      <tr><td>Service fee (12%)</td><td align="right">₹${serviceFee.toLocaleString('en-IN')}</td></tr>
+      <tr><td>GST (12%)</td><td align="right">₹${gst.toLocaleString('en-IN')}</td></tr>
+      ${lateCheckout ? `<tr><td>Late checkout</td><td align="right">₹${(800).toLocaleString('en-IN')}</td></tr>` : ''}
+      ${insurance ? `<tr><td>Travel insurance</td><td align="right">₹${(insuranceFeeValue).toLocaleString('en-IN')}</td></tr>` : ''}
+    `;
+
+    const html = `
+    <html>
+      <head>
+        <meta name="viewport" content="initial-scale=1, width=device-width" />
+        <style>
+          :root {
+            --ink:#111827; --muted:#6B7280; --line:#E5E7EB; --bg:#FFFFFF; --chip:#F3F4F6; --brand:#111827;
+          }
+          *{box-sizing:border-box}
+          body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;padding:24px;}
+          .doc{max-width:720px;margin:0 auto;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+          .hdr{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;background:#fafafa;border-bottom:1px solid var(--line)}
+          .brand{font-weight:700;letter-spacing:.2px;color:var(--brand)}
+          .code{font-monospace:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;background:var(--chip);padding:6px 10px;border-radius:8px}
+          .sec{padding:20px}
+          .row{margin:6px 0}
+          .muted{color:var(--muted)}
+          .grid{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+          .card{border:1px solid var(--line);border-radius:10px;padding:16px}
+          h1{font-size:18px;margin:0 0 8px 0}
+          h2{font-size:14px;margin:0 0 8px 0;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+          table{width:100%;border-collapse:collapse;margin-top:4px}
+          td{padding:6px 0;border-bottom:1px solid var(--line)}
+          tr:last-child td{border-bottom:none}
+          .total{font-weight:700}
+          .foot{padding:14px 20px;border-top:1px solid var(--line);font-size:12px;color:var(--muted);background:#fafafa}
+          .pill{display:inline-block;padding:4px 8px;border-radius:999px;background:var(--chip);font-size:12px}
+        </style>
+      </head>
+      <body>
+        <div class="doc">
+          <div class="hdr">
+            <div class="brand">UrbanNest • Booking Receipt</div>
+            <div class="code">Booking code: ${bookingCode}</div>
+          </div>
+
+          <div class="sec grid">
+            <div class="card">
+              <h2>Guest & Stay</h2>
+              <div class="row"><strong>${String(listingName || 'Stay')}</strong></div>
+              <div class="row muted">${listingLocation}</div>
+              <div class="row">Dates: <strong>${checkInDate ?? ''}</strong> → <strong>${checkOutDate ?? ''}</strong></div>
+              <div class="row">Guests: <strong>${guests}</strong></div>
+            </div>
+
+            <div class="card">
+              <h2>Payment</h2>
+              <div class="row">Method: <span class="pill">${paymentMethod.toUpperCase()}</span></div>
+              <div class="row">Status: <span class="pill">Paid</span></div>
+            </div>
+          </div>
+
+          <div class="sec">
+            <h2>Price breakdown</h2>
+            <table>
+              ${lineItemsHtml}
+              <tr><td class="total">Total paid</td><td class="total" align="right">₹${total.toLocaleString('en-IN')}</td></tr>
+            </table>
+          </div>
+
+          <div class="foot">
+            This receipt confirms your booking with UrbanNest. For changes or support, reply in-app to your host message thread.
+          </div>
+        </div>
+      </body>
+    </html>`;
+
+    const { uri } = await Print.printToFileAsync({ html });
+    if (await Sharing.isAvailableAsync()) {
+      await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Share receipt' });
+    }
+  }
+
+
   // Validate dates
   const validateDates = () => {
     const n = getNights();
@@ -246,6 +339,11 @@ export default function BookingPage() {
     } else if (currentStep === 'payment') {
       if (paymentMethod === 'upi' && !upiId) return Alert.alert('Payment Error', 'Please enter your UPI ID');
       if (paymentMethod === 'card' && !cardNumber) return Alert.alert('Payment Error', 'Please enter your card details');
+      upsertBooking(String(listingId), {
+        start: String(checkInDate),
+        end: String(checkOutDate),
+        guestName: 'You',
+      });
       Alert.alert('Payment Successful!', 'Your booking is being confirmed.');
       setCurrentStep('confirmation');
     }
@@ -550,7 +648,7 @@ export default function BookingPage() {
               </TouchableOpacity>
             </View>
 
-            <TouchableOpacity style={styles.outlineButton}>
+            <TouchableOpacity style={styles.outlineButton} onPress={downloadReceiptNow}>
               <Download size={16} color="#111827" />
               <Text style={styles.outlineButtonText}>Download booking details</Text>
             </TouchableOpacity>

@@ -18,6 +18,7 @@ import { Gesture, GestureDetector, FlatList as GestureFlatList } from 'react-nat
 import MapView, { Marker, Polyline, PROVIDER_DEFAULT, Region } from 'react-native-maps';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useListings } from './context/ListingsContext';
 
 // ---- Height constants ----
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -34,8 +35,8 @@ const GEOAPIFY_ROUTING_URL = `https://api.geoapify.com/v1/routing`;
 interface Property {
   id: string; name: string; location: string; price: number; rating: number;
   distanceFromRoute: string; segmentDistance: string; image: string; features: string[];
-  routeSegment: string; coordinates: { latitude: number; longitude: number; };
-  type?: 'room' | 'home' | 'hotel';
+  routeSegment: string; coordinates?: { latitude: number; longitude: number };
+  type?: 'room' | 'home' | 'hotel'; __hostId?: string;
 }
 const mockProperties: Property[] = [
   { id: '1', name: 'Highway Rest Inn', location: 'Near Panvel Toll Plaza', price: 1800, rating: 4.5, distanceFromRoute: '0.5 km', segmentDistance: '42 km from Mumbai', image: 'https://images.unsplash.com/photo-1566073771259-6a8506099945?q=80&w=1200&auto=format&fit=crop', features: ['Parking', '24×7 Check-in', 'Highway Access'], routeSegment: 'Near Panvel', coordinates: { latitude: 18.9894, longitude: 73.1175 } },
@@ -51,32 +52,69 @@ const mockRegion: Region = {
 
 const radiusOptions = ['1 km of route', '3 km of route', '5 km of route', '10 km of route'];
 
-const RoutePropertyCard = ({ property }: { property: Property }) => (
-  <View style={styles.card}>
-    <Image source={{ uri: property.image }} style={styles.cardImage}
-      placeholder={{ blurhash: 'LEHV6nWB2yk8pyo0adR*.7kCMdnj' }} transition={300} />
-    <View style={styles.cardDetails}>
-      <View style={[styles.cardRow, { marginBottom: 4 }]}>
-        <Text style={styles.cardName} numberOfLines={2}>{property.name}</Text>
-        <View style={styles.cardRating}><Star size={14} color="#F59E0B" fill="#F59E0B" /><Text style={styles.cardRatingText}>{property.rating}</Text></View>
-      </View>
-      <View style={[styles.cardRow, { marginBottom: 2 }]}>
-        <MapPin size={12} color="#6B7280" />
-        <Text style={styles.cardLocation} numberOfLines={1}>{property.location}</Text>
-      </View>
-      <Text style={styles.routeDistanceText}>{property.segmentDistance} • {property.distanceFromRoute} from route</Text>
-      <View style={styles.cardFeatures}>
-        {property.features.slice(0, 3).map((feature) => (
-          <View key={feature} style={styles.cardFeatureTag}><Text style={styles.cardFeatureText}>{feature}</Text></View>
-        ))}
-      </View>
-      <View style={[styles.cardRow, { marginTop: 'auto' }]}>
-        <Text style={styles.cardPrice}>₹{property.price.toLocaleString('en-IN')}<Text style={styles.cardPriceNight}>/night</Text></Text>
-        <TouchableOpacity style={styles.cardViewButton}><Text style={styles.cardViewButtonText}>View</Text></TouchableOpacity>
+
+// at top of the file you already have:
+// import { useRouter } from 'expo-router';
+
+const RoutePropertyCard = ({ property }: { property: Property }) => {
+  const router = useRouter(); // ← hooks must be inside a block body
+
+  return (
+    <View style={styles.card}>
+      <Image
+        source={{ uri: property.image }}
+        style={styles.cardImage}
+        placeholder={{ blurhash: 'LEHV6nWB2yk8pyo0adR*.7kCMdnj' }}
+        transition={300}
+      />
+      <View style={styles.cardDetails}>
+        <View style={[styles.cardRow, { marginBottom: 4 }]}>
+          <Text style={styles.cardName} numberOfLines={2}>{property.name}</Text>
+          <View style={styles.cardRating}>
+            <Star size={14} color="#F59E0B" fill="#F59E0B" />
+            <Text style={styles.cardRatingText}>{property.rating}</Text>
+          </View>
+        </View>
+
+        <View style={[styles.cardRow, { marginBottom: 2 }]}>
+          <MapPin size={12} color="#6B7280" />
+          <Text style={styles.cardLocation} numberOfLines={1}>{property.location}</Text>
+        </View>
+
+        <Text style={styles.routeDistanceText}>
+          {property.segmentDistance} • {property.distanceFromRoute} from route
+        </Text>
+
+        <View style={styles.cardFeatures}>
+          {property.features.slice(0, 3).map((feature) => (
+            <View key={feature} style={styles.cardFeatureTag}>
+              <Text style={styles.cardFeatureText}>{feature}</Text>
+            </View>
+          ))}
+        </View>
+
+        <View style={[styles.cardRow, { marginTop: 'auto' }]}>
+          <Text style={styles.cardPrice}>
+            ₹{property.price.toLocaleString('en-IN')}
+            <Text style={styles.cardPriceNight}>/night</Text>
+          </Text>
+
+          <TouchableOpacity
+            style={styles.cardViewButton}
+            onPress={() => {
+              const params = (property as any).__hostId
+                ? { source: 'host', id: (property as any).__hostId }
+                : { source: 'mock', payload: encodeURIComponent(JSON.stringify(property)) };
+              router.push({ pathname: '/listing-details', params });
+            }}
+          >
+            <Text style={styles.cardViewButtonText}>View</Text>
+          </TouchableOpacity>
+        </View>
       </View>
     </View>
-  </View>
-);
+  );
+};
 
 // --- RouteSegmentsList ---
 const RouteSegmentsList = ({ properties }: { properties: Property[] }) => {
@@ -396,6 +434,47 @@ const debounce = (fn: (...a: any[]) => void, ms = 400) => {
   };
 };
 
+// Haversine distance in km
+const haversineKm = (
+  a: { latitude: number; longitude: number },
+  b: { latitude: number; longitude: number }
+) => {
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const R = 6371;
+  const dLat = toRad(b.latitude - a.latitude);
+  const dLon = toRad(b.longitude - a.longitude);
+  const la1 = toRad(a.latitude);
+  const la2 = toRad(b.latitude);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(la1) * Math.cos(la2) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+};
+
+// Minimum distance from point to a polyline (km) + where it occurs
+function distancePointToPolylineKm(
+  pt: { latitude: number; longitude: number },
+  line: { latitude: number; longitude: number }[]
+): { dKm: number; atIndex: number; distFromStartKm: number } {
+  if (!line.length) return { dKm: Number.POSITIVE_INFINITY, atIndex: 0, distFromStartKm: 0 };
+
+  let best = Number.POSITIVE_INFINITY;
+  let bestIdx = 0;
+  let cum = 0;
+  const cumDist: number[] = [0];
+  for (let i = 1; i < line.length; i++) {
+    cum += haversineKm(line[i - 1], line[i]);
+    cumDist.push(cum);
+  }
+
+  for (let i = 0; i < line.length; i++) {
+    const d = haversineKm(pt, line[i]);
+    if (d < best) {
+      best = d; bestIdx = i;
+    }
+  }
+  return { dKm: best, atIndex: bestIdx, distFromStartKm: cumDist[bestIdx] ?? 0 };
+}
+
+
 // --- Main Page ---
 type LatLon = { lat: number; lon: number };
 type RouteOption = {
@@ -413,10 +492,10 @@ export default function RoutePlannerPage() {
   const [selectedRadius, setSelectedRadius] = useState('5 km of route');
 
   // Inputs accept any text (address/city/POI)
-  const [fromLocationInput, setFromLocationInput] = useState('Mumbai');
-  const [toLocationInput, setToLocationInput] = useState('Pune');
-  const [fromCoords, setFromCoords] = useState<LatLon | null>({ lat: 19.0760, lon: 72.8777 });
-  const [toCoords, setToCoords] = useState<LatLon | null>({ lat: 18.5204, lon: 73.8567 });
+  const [fromLocationInput, setFromLocationInput] = useState('');
+  const [toLocationInput, setToLocationInput] = useState('');
+  const [fromCoords, setFromCoords] = useState<LatLon | null>(null);
+  const [toCoords, setToCoords] = useState<LatLon | null>(null);
 
   const [checkInDate, setCheckInDate] = useState<string | null>(null);
   const [checkOutDate, setCheckOutDate] = useState<string | null>(null);
@@ -433,7 +512,7 @@ export default function RoutePlannerPage() {
   const [amenities, setAmenities] = useState<string[]>([]);
   const [minRating, setMinRating] = useState('0');
 
-  const [filteredProperties, setFilteredProperties] = useState(mockProperties);
+  const [filteredProperties, setFilteredProperties] = useState<Property[]>([]);
 
   // Bottom sheet state
   const [maxSheetHeight, setMaxSheetHeight] = useState(DEFAULT_MAX_HEIGHT);
@@ -450,6 +529,34 @@ export default function RoutePlannerPage() {
   const [routingBusy, setRoutingBusy] = useState(false);
 
   const regionRef = useRef<Region | null>(null);
+  const { listings } = useListings();
+  type PropertyLike = Property;
+
+
+  const hostProperties: PropertyLike[] = React.useMemo(() => {
+  return listings
+    .filter((l) => !!l.coords) // only items with coords can be checked against the route
+    .map((l) => ({
+      id: l.id,
+      __hostId: l.id,
+      name: l.title,
+      location: l.address ? `${l.address}, ${l.location}` : l.location,
+      price: l.pricePerNight,
+      rating: l.rating || 0,
+      distanceFromRoute: '',   // will be filled when we know the route
+      segmentDistance: '',     // will be filled when we know the route
+      image: l.image,
+      features: (l.amenities ?? []).slice(0, 3),
+      routeSegment: 'Along route',
+      coordinates: l.coords ? { latitude: l.coords.latitude, longitude: l.coords.longitude } : undefined,
+      type: 'room',
+    }));
+}, [listings]);
+
+const baseProperties: PropertyLike[] = React.useMemo(
+  () => [...hostProperties, ...mockProperties],
+  [hostProperties]
+);
 
   // Sheet helpers
   const adjustZoom = async (delta: number) => {
@@ -595,9 +702,11 @@ export default function RoutePlannerPage() {
           animated: true,
         });
       }
-    } catch (e: any) {
-      console.error('Routing failed:', e);
-      Alert.alert('Routing Error', e?.message || 'Unable to fetch route.');
+    } catch (error) {
+      console.error('Route fetching error:', error);
+      Alert.alert('Error', 'Could not fetch the route. Please try again.');
+      setBestRoute(null);
+      setAltRoutes([]);
     } finally {
       setRoutingBusy(false);
     }
@@ -605,6 +714,28 @@ export default function RoutePlannerPage() {
 
   // Debounced version so we don't hammer the API on quick edits
   const debouncedFetch = useMemo(() => debounce(fetchBestRoute, 400), []);
+
+  // Debounced geocode-as-you-type: updates from/to coords without auto-filling text
+  const debouncedGeocodeInput = React.useMemo(
+    () =>
+      debounce(async (type: 'from' | 'to', text: string) => {
+        if (!text.trim() || !GEOAPIFY_API_KEY) return;
+        const biasParam = `&bias=countrycode:in`;
+        const url = `${GEOAPIFY_GEOCODE_URL}&text=${encodeURIComponent(text.trim())}${biasParam}`;
+        try {
+          const res = await fetch(url);
+          if (!res.ok) return;
+          const data = await res.json();
+          const first = data?.features?.[0];
+          if (!first) return;
+          const [lon, lat] = first.geometry.coordinates;
+          if (type === 'from') setFromCoords({ lat, lon });
+          else setToCoords({ lat, lon });
+        } catch {}
+      }, 450),
+    []
+  );
+
 
   // Geocode helper (works for city/address/POI)
   const handleLocationSearch = async (type: 'from' | 'to') => {
@@ -627,10 +758,8 @@ export default function RoutePlannerPage() {
 
         if (type === 'from') {
           setFromCoords({ lat, lon });
-          setFromLocationInput(label);
         } else {
           setToCoords({ lat, lon });
-          setToLocationInput(label);
         }
       } else {
         Alert.alert('Not Found', `No results for "${query}"`);
@@ -654,6 +783,12 @@ export default function RoutePlannerPage() {
     });
   };
 
+  const radiusKm = React.useMemo(() => {
+    // "5 km of route" -> 5
+    const m = selectedRadius.match(/(\d+)\s*km/i);
+    return m ? parseInt(m[1], 10) : 5;
+  }, [selectedRadius]);
+
   const displayDates = () => {
     if (checkInDate && checkOutDate) {
       return `${format(parseISO(checkInDate), 'MMM dd')} - ${format(parseISO(checkOutDate), 'MMM dd')}`;
@@ -670,7 +805,7 @@ export default function RoutePlannerPage() {
   }, [fromCoords?.lat, fromCoords?.lon, toCoords?.lat, toCoords?.lon]);
 
   const applyFilters = () => {
-    let out = [...mockProperties];
+    let out = [...baseProperties];
 
     // Road toggles
     if (hasParking) out = out.filter((p) => p.features.includes('Parking'));
@@ -680,7 +815,7 @@ export default function RoutePlannerPage() {
 
     // Property type (default to 'hotel' when missing)
     if (propertyTypes.length > 0) {
-      const set = new Set(propertyTypes);
+      const set = new Set(propertyTypes.map((t) => t.toLowerCase()));
       out = out.filter((p) => set.has((p.type || 'hotel').toLowerCase()));
     }
 
@@ -693,9 +828,34 @@ export default function RoutePlannerPage() {
     const minR = parseFloat(minRating || '0') || 0;
     out = out.filter((p) => p.rating >= minR);
 
+    // If we have a route, compute distances & filter by radius
+    if (bestRoute && bestRoute.coords.length > 1) {
+      out = out.map((p) => {
+        if (!p.coordinates) return { ...p, distanceFromRoute: '', segmentDistance: '' };
+        const { dKm, distFromStartKm } = distancePointToPolylineKm(p.coordinates, bestRoute.coords);
+        const prettyD = `${dKm.toFixed(1)} km`;
+        const prettySeg = `${Math.round(distFromStartKm)} km from ${fromLocationInput}`;
+        return { ...p, distanceFromRoute: prettyD, segmentDistance: prettySeg };
+      }).filter((p) => {
+        if (!p.coordinates) return false; // without coords, we can't place it along the route
+        const { dKm } = distancePointToPolylineKm(p.coordinates, bestRoute.coords);
+        return dKm <= radiusKm;
+      });
+    } else {
+      // No route yet: show nothing
+      out = [];
+    }
+
     setFilteredProperties(out);
     setFilterModalVisible(false);
   };
+
+  useEffect(() => {
+    // Re-apply whenever the chosen radius or the best route changes
+    applyFilters();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedRadius, bestRoute]);
+
 
   const clearFilters = () => {
     setHasParking(false);
@@ -705,9 +865,13 @@ export default function RoutePlannerPage() {
     setPropertyTypes([]);
     setAmenities([]);
     setMinRating('0');
-    setFilteredProperties(mockProperties);
+    setFilteredProperties(baseProperties);
   };
 
+  useEffect(() => {
+    setFilteredProperties(baseProperties);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [baseProperties]);
 
   const renderPriceMarker = (price: number) => (
     <View style={styles.priceTagWrap}><Text style={styles.priceTagText}>₹{(price / 1000).toFixed(1)}k</Text></View>
@@ -745,7 +909,7 @@ export default function RoutePlannerPage() {
                 <Text style={styles.inputLabel}>From</Text>
                 <TextInput
                   value={fromLocationInput}
-                  onChangeText={setFromLocationInput}
+                  onChangeText={(t) => { setFromLocationInput(t); debouncedGeocodeInput('from', t); }}
                   onSubmitEditing={() => handleLocationSearch('from')}
                   placeholder="City / Address / Place"
                   placeholderTextColor="#6B7280"
@@ -758,7 +922,7 @@ export default function RoutePlannerPage() {
                 <Text style={styles.inputLabel}>To</Text>
                 <TextInput
                   value={toLocationInput}
-                  onChangeText={setToLocationInput}
+                  onChangeText={(t) => { setToLocationInput(t); debouncedGeocodeInput('to', t); }}
                   onSubmitEditing={() => handleLocationSearch('to')}
                   placeholder="City / Address / Place"
                   placeholderTextColor="#6B7280"
@@ -860,8 +1024,8 @@ export default function RoutePlannerPage() {
                   )}
 
                   <MapView ref={mapRef} style={styles.map} provider={PROVIDER_DEFAULT} initialRegion={mockRegion} onRegionChangeComplete={(region) => (regionRef.current = region)} onMapReady={() => mapRef.current?.animateCamera({ pitch: 0, heading: 0 }, { duration: 0 })}>
-                    {mockProperties.map(prop => (
-                      <Marker key={prop.id} coordinate={prop.coordinates}>
+                    {filteredProperties.filter(p => p.coordinates).map(prop => (
+                      <Marker key={prop.id} coordinate={prop.coordinates!}>
                         {renderPriceMarker(prop.price)}
                       </Marker>
                     ))}

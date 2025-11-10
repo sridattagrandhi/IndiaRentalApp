@@ -2,7 +2,7 @@
 import { ThemedView } from '@/components/themed-view';
 import Constants from 'expo-constants';
 import { Image } from 'expo-image';
-import { List, LocateFixed, Map, MapPin, Navigation, Search, Star } from 'lucide-react-native'; // ⬅️ added LocateFixed
+import { List, LocateFixed, Map, MapPin, Navigation, Search, Star } from 'lucide-react-native';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Alert,
@@ -16,18 +16,34 @@ import {
 } from 'react-native';
 
 import * as Location from 'expo-location';
-import { useRouter } from 'expo-router'; // Import useRouter
+import { useRouter } from 'expo-router';
 import MapView, { Marker, PROVIDER_DEFAULT, Region, UrlTile } from 'react-native-maps';
+import { useListings } from '../context/ListingsContext';
 
 // --- API Key and URLs ---
 const GEOAPIFY_API_KEY = Constants.expoConfig?.extra?.GEOAPIFY_API_KEY;
 
 if (!GEOAPIFY_API_KEY) {
-  console.error("Geoapify API key is missing! Check .env and app.config.js");
-  Alert.alert("Configuration Error", "Map API key is missing. Map functionality may be limited.");
+  console.error('Geoapify API key is missing! Check .env and app.config.js');
+  Alert.alert('Configuration Error', 'Map API key is missing. Map functionality may be limited.');
 }
 
 const GEOAPIFY_TILE_URL = `https://maps.geoapify.com/v1/tile/osm-bright/{z}/{x}/{y}.png?apiKey=${GEOAPIFY_API_KEY}`;
+
+// Rough center of India + wide deltas for a country view
+const INDIA_REGION = {
+  latitude: 22.9734,          // near Nagpur
+  longitude: 78.6569,
+  latitudeDelta: 20,          // wide enough for pan-India
+  longitudeDelta: 20,
+};
+
+// (Optional) bounding box, useful if you want a perfect fit
+const INDIA_BOUNDS = [
+  { latitude: 8.4,  longitude: 68.7 }, // SW (Kanyakumari-ish)
+  { latitude: 37.6, longitude: 97.4 }, // NE (Arunachal-ish)
+] as const;
+
 
 // --- Data Interfaces ---
 interface Property {
@@ -38,49 +54,18 @@ interface Property {
   rating: number;
   distance: string;
   image: string;
-  features: string[];
+  features?: string[];
   coordinates: [number, number]; // [lng, lat]
+  images?: string[];
+  maxGuests?: number;
+  calendar?: Record<string, { status: string }>;
+  bookings?: Array<{ start: string; end: string }>;
+  blocks?: Array<{ start: string; end: string }>;
+  rules?: string[];
+  prohibited?: string[];
+  amenities?: string[];
+  __hostId?: string;
 }
-
-// --- MODIFIED: Mock Data (San Francisco) ---
-const mockProperties: Property[] = [
-  {
-    id: '1',
-    name: 'Cozy Apartment in Mission',
-    location: 'Mission District, SF',
-    price: 3200,
-    rating: 4.8,
-    distance: '1.2 km',
-    image: 'https://images.unsplash.com/photo-1560448204-e02f11c3d0e2?w=400&h=400&fit=crop',
-    features: ['Parking', 'WiFi', 'AC'],
-    coordinates: [-122.4194, 37.7749],
-  },
-  {
-    id: '2',
-    name: 'Spacious Villa in Pac Heights',
-    location: 'Pacific Heights, SF',
-    price: 5500,
-    rating: 4.9,
-    distance: '3.1 km',
-    image: 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?w=400&h=400&fit=crop',
-    features: ['Pool', 'Parking'],
-    coordinates: [-122.4421, 37.7925],
-  },
-  {
-    id: '3',
-    name: 'Budget Stay Near Golden Gate',
-    location: 'Richmond District, SF',
-    price: 1800,
-    rating: 4.5,
-    distance: '4.2 km',
-    image: 'https://images.unsplash.com/photo-1566073771259-6a8506099945?w=400&h=400&fit=crop',
-    features: ['WiFi', 'Breakfast'],
-    coordinates: [-122.4731, 37.7801],
-  },
-];
-
-const quickFilters = ['Tonight', 'Weekend', '₹ Budget', 'Family', 'Parking'];
-const popularAreas = ['San Francisco', 'Oakland', 'San Jose', 'Napa', 'Sacramento'];
 
 // --- Zillow/Airbnb-style price marker ---
 const MarkerTag = ({ price }: { price: number }) => (
@@ -93,7 +78,7 @@ const MarkerTag = ({ price }: { price: number }) => (
 );
 
 // --- Property Card ---
-const PropertyCard = ({ property }: { property: Property }) => (
+const PropertyCard = ({ property, router }: { property: Property; router: ReturnType<typeof useRouter> }) => (
   <TouchableOpacity style={styles.card}>
     <View style={styles.cardContent}>
       <Image
@@ -104,7 +89,9 @@ const PropertyCard = ({ property }: { property: Property }) => (
       />
       <View style={styles.cardDetails}>
         <View style={styles.cardRow}>
-          <Text style={styles.cardName} numberOfLines={1}>{property.name}</Text>
+          <Text style={styles.cardName} numberOfLines={1}>
+            {property.name}
+          </Text>
           <View style={styles.cardRating}>
             <Star size={12} color="#F59E0B" fill="#F59E0B" />
             <Text style={styles.cardRatingText}>{property.rating}</Text>
@@ -117,15 +104,52 @@ const PropertyCard = ({ property }: { property: Property }) => (
           </Text>
         </View>
         <View style={styles.cardFeatures}>
-          {property.features.map((feature) => (
+          {property.features?.map((feature) => (
             <View key={feature} style={styles.cardFeatureTag}>
               <Text style={styles.cardFeatureText}>{feature}</Text>
             </View>
           ))}
         </View>
         <View style={styles.cardRow}>
-          <Text style={styles.cardPrice}>₹{property.price}<Text style={styles.cardPriceNight}>/night</Text></Text>
-          <TouchableOpacity style={styles.cardViewButton}>
+          <Text style={styles.cardPrice}>
+            ₹{property.price}
+            <Text style={styles.cardPriceNight}>/night</Text>
+          </Text>
+          <TouchableOpacity
+            style={styles.cardViewButton}
+            onPress={() => {
+              if (property.__hostId) {
+                router.push({
+                  pathname: '/listing-details',
+                  params: { source: 'host', id: property.__hostId },
+                });
+                return;
+              }
+              // otherwise send a rich payload
+              router.push({
+                pathname: '/listing-details',
+                params: {
+                  source: 'mock',
+                  payload: encodeURIComponent(JSON.stringify({
+                    id: property.id,
+                    name: property.name,
+                    location: property.location,
+                    price: property.price,
+                    rating: property.rating,
+                    images: property.images ?? [property.image].filter(Boolean),
+                    maxGuests: property.maxGuests ?? 4,
+                    calendar: property.calendar ?? undefined,
+                    bookings: property.bookings ?? undefined,
+                    blocks: property.blocks ?? undefined,
+                    coordinates: property.coordinates,
+                    rules: property.rules ?? [],
+                    prohibited: property.prohibited ?? [],
+                    features: property.amenities ?? property.features ?? [],
+                  })),
+                },
+              });
+            }}
+          >
             <Text style={styles.cardViewButtonText}>View</Text>
           </TouchableOpacity>
         </View>
@@ -136,79 +160,82 @@ const PropertyCard = ({ property }: { property: Property }) => (
 
 // --- Main ---
 export default function HomePage() {
-  const router = useRouter(); // Get the router
-  const [viewMode, setViewMode] = useState<'map' | 'list'>('list');
-  const [selectedFilters, setSelectedFilters] = useState<string[]>([]);
+  const router = useRouter();
   const mapViewRef = useRef<MapView>(null);
+
+  const [viewMode, setViewMode] = useState<'map' | 'list'>('list');
   const [initialRegion, setInitialRegion] = useState<Region | undefined>(undefined);
   const [currentRegion, setCurrentRegion] = useState<Region | undefined>(undefined);
   const [showFindNearMe, setShowFindNearMe] = useState(true);
-  const [areaLabel, setAreaLabel] = useState<string>('your area');
 
-  // On mount: set region
+  const { listings } = useListings();
+
+  // derive properties from context listings (only those with coords)
+  const listingsWithCoords = listings.filter((l) => l.coords);
+
+  // Cards list (works even if coords are missing)
+  const listItems = listings.map((l) => ({
+    id: l.id,
+    __hostId: l.id, // ← enables the host path
+    name: l.title,
+    location: l.address ? `${l.address}, ${l.location}` : l.location,
+    price: l.pricePerNight,
+    rating: l.rating || 0,
+    distance: '',
+    image: l.image,
+    images: l.images ?? (l.image ? [l.image] : []), // ← multiple photos
+    maxGuests: l.maxGuests,                          // ← cap
+    calendar: l.calendar,                            // ← day map
+    bookings: (l as any).bookings,                   // ← ranges, if you store them
+    blocks: (l as any).blocks,
+    rules: l.rules,
+    prohibited: (l as any).prohibited,
+    amenities: l.amenities,
+    coordinates: [
+      l.coords?.longitude ?? (currentRegion?.longitude ?? 77.5946),
+      l.coords?.latitude ?? (currentRegion?.latitude ?? 12.9716),
+    ] as [number, number],
+  }));
+
+
+  const markers = listingsWithCoords.map((l) => ({
+    id: l.id,
+    name: l.title,
+    price: l.pricePerNight,
+    coord: { latitude: l.coords!.latitude, longitude: l.coords!.longitude },
+  }));
+
+  // On mount: default to India (Bengaluru) — no GPS prompt
   useEffect(() => {
-    const getLocationAndSetRegion = async () => {
-      let { status } = await Location.requestForegroundPermissionsAsync();
-      let fallback: Region = { latitude: 37.7749, longitude: -122.4194, latitudeDelta: 0.1, longitudeDelta: 0.1 }; // Default to SF
-      if (status !== 'granted') { setInitialRegion(fallback); setCurrentRegion(fallback); return; }
-      try {
-        let loc = await Location.getCurrentPositionAsync({});
-        const region = { latitude: loc.coords.latitude, longitude: loc.coords.longitude, latitudeDelta: 0.05, longitudeDelta: 0.05 };
-        setInitialRegion(region);
-        setCurrentRegion(region);
-      } catch {
-        setInitialRegion(fallback);
-        setCurrentRegion(fallback);
-      }
-    };
-    getLocationAndSetRegion();
+    const india = { latitude: 12.9716, longitude: 77.5946, latitudeDelta: 0.08, longitudeDelta: 0.08 };
+    setInitialRegion(india);
+    setCurrentRegion(india);
   }, []);
 
-  // Reverse geocode center for “Listings in …”
-  const fetchAreaLabel = async (lat: number, lon: number) => {
-    try {
-      if (!GEOAPIFY_API_KEY) return;
-      const resp = await fetch(`https://api.geoapify.com/v1/geocode/reverse?lat=${lat}&lon=${lon}&apiKey=${GEOAPIFY_API_KEY}`);
-      const j = await resp.json();
-      const p = j?.features?.[0]?.properties;
-      const name = p?.city || p?.town || p?.village || p?.county || p?.state || p?.country || 'this area';
-      setAreaLabel(name);
-    } catch {}
-  };
-
-  useEffect(() => {
-    const r = currentRegion ?? initialRegion;
-    if (r) fetchAreaLabel(r.latitude, r.longitude);
-  }, [currentRegion, initialRegion]);
-
-  const toggleFilter = (f: string) =>
-    setSelectedFilters(prev => prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f]);
-
-  // --- MODIFIED: "Find stays near me" handler ---
+  // Navigate to Search (with or without GPS)
   const handleFindStaysNearMe = async () => {
     let { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== 'granted') { Alert.alert('Permission denied', 'Enable location services to find stays near you.'); return; }
-    
+    if (status !== 'granted') {
+      Alert.alert('Permission denied', 'Enable location services to find stays near you.');
+      return;
+    }
+
     try {
       let loc = await Location.getCurrentPositionAsync({});
       // Navigate to search page with current location
       router.push({
         pathname: '/search',
-        params: { lat: loc.coords.latitude, lon: loc.coords.longitude }
+        params: { lat: loc.coords.latitude, lon: loc.coords.longitude },
       });
     } catch {
-      Alert.alert("Location Error", "Could not fetch your current location. Defaulting to search.");
-      router.push('/search'); // Go to search anyway
+      Alert.alert('Location Error', 'Could not fetch your current location. Defaulting to search.');
+      router.push('/search');
     }
   };
 
-  // --- MODIFIED: Search bar navigation ---
-  const handleNavigateToSearch = () => {
-    // Navigate to search page without location params
-    router.push('/search');
-  };
+  const handleNavigateToSearch = () => router.push('/search');
 
-  // ⬇️ NEW: recenter-to-user for the home map
+  // recenter-to-user for the home map (button)
   const recenterToUser = async () => {
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
@@ -218,59 +245,83 @@ export default function HomePage() {
       }
       const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
       const center = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
-      // Update state for label/logic
       const newRegion: Region = { ...center, latitudeDelta: 0.02, longitudeDelta: 0.02 };
       setCurrentRegion(newRegion);
-
-      // Smooth camera move
       mapViewRef.current?.animateCamera?.({ center, zoom: 15 }, { duration: 350 });
     } catch (e) {
       console.error(e);
       Alert.alert('Location Error', 'Could not get your current location.');
     }
   };
-  // ⬆️
 
   if (!initialRegion) {
-    return (<View style={styles.loadingContainer}><Text>Finding your location...</Text></View>);
+    return (
+      <View style={styles.loadingContainer}>
+        <Text>Finding your location...</Text>
+      </View>
+    );
   }
+
+  const popularAreas = [
+    'Mumbai', 'Delhi', 'Bengaluru', 'Hyderabad', 'Chennai',
+    'Pune', 'Jaipur', 'Goa', 'Kolkata', 'Ahmedabad'
+  ] as const;
+
+  const CITY_COORDS: Record<typeof popularAreas[number], { lat: number; lon: number; delta?: number }> = {
+    Mumbai:     { lat: 19.0760, lon: 72.8777, delta: 0.18 },
+    Delhi:      { lat: 28.6139, lon: 77.2090, delta: 0.22 },
+    Bengaluru:  { lat: 12.9716, lon: 77.5946, delta: 0.18 },
+    Hyderabad:  { lat: 17.4065, lon: 78.4772, delta: 0.2 },
+    Chennai:    { lat: 13.0827, lon: 80.2707, delta: 0.2 },
+    Pune:       { lat: 18.5204, lon: 73.8567, delta: 0.2 },
+    Jaipur:     { lat: 26.9124, lon: 75.7873, delta: 0.22 },
+    Goa:        { lat: 15.2993, lon: 74.1240, delta: 0.3 },   // wider to see coastal area
+    Kolkata:    { lat: 22.5726, lon: 88.3639, delta: 0.2 },
+    Ahmedabad:  { lat: 23.0225, lon: 72.5714, delta: 0.22 },
+  };
+
+  function flyToCity(city: typeof popularAreas[number]) {
+    const c = CITY_COORDS[city];
+    if (!c || !mapViewRef.current) return;
+
+    // Pick one of the two animations below:
+
+    // (A) animateToRegion (nice if you rely on latitudeDelta/longitudeDelta)
+    mapViewRef.current.animateToRegion(
+      {
+        latitude: c.lat,
+        longitude: c.lon,
+        latitudeDelta: c.delta ?? 0.2,
+        longitudeDelta: (c.delta ?? 0.2) * 1.1,
+      },
+      800
+    );
+
+    // (B) Or animateCamera with zoom (if you prefer zoom levels)
+    // mapRef.current.animateCamera(
+    //   { center: { latitude: c.lat, longitude: c.lon }, zoom: 12 },
+    //   { duration: 800 }
+    // );
+  }
+
 
   return (
     <ThemedView style={styles.container}>
       <SafeAreaView style={styles.safeArea}>
         {/* Header */}
         <View style={styles.header}>
-          {/* Search Bar (Modified to be a button) */}
+          {/* Search Bar (press to navigate) */}
           <View style={styles.searchContainer}>
-            <TouchableOpacity
-              style={styles.searchInput}
-              onPress={handleNavigateToSearch} // Navigate on press
-              activeOpacity={0.8}
-            >
+            <TouchableOpacity style={styles.searchInput} onPress={handleNavigateToSearch} activeOpacity={0.8}>
               <Text style={styles.searchInputPlaceholder}>
-                Search city, landmark, or route (e.g., Mumbai → Pune)
+                Search city, state or landmark
               </Text>
             </TouchableOpacity>
-            
+
             <View style={styles.searchIconWrap} pointerEvents="none">
               <Search size={18} color="#9AA0A6" />
             </View>
           </View>
-
-          {/* Quick Filters */}
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filtersContainer}>
-            {quickFilters.map((f) => (
-              <TouchableOpacity
-                key={f}
-                style={[styles.filterButton, selectedFilters.includes(f) && styles.filterButtonSelected]}
-                onPress={() => toggleFilter(f)}
-              >
-                <Text style={selectedFilters.includes(f) ? styles.filterTextSelected : styles.filterText}>
-                  {f}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
         </View>
 
         {/* Content */}
@@ -281,7 +332,7 @@ export default function HomePage() {
                 ref={mapViewRef}
                 style={styles.map}
                 provider={PROVIDER_DEFAULT}
-                initialRegion={initialRegion}
+                initialRegion={INDIA_REGION}
                 onRegionChangeComplete={setCurrentRegion}
                 mapType="none"
                 showsUserLocation={true}
@@ -290,24 +341,33 @@ export default function HomePage() {
                   <UrlTile urlTemplate={GEOAPIFY_TILE_URL} maximumZ={20} flipY={false} zIndex={-1} />
                 )}
 
-                {mockProperties.map((p) => (
+                {markers.map((m) => (
                   <Marker
-                    key={p.id}
-                    coordinate={{ latitude: p.coordinates[1], longitude: p.coordinates[0] }}
-                    onPress={() => Alert.alert('Stay Selected', p.name)}
+                    key={m.id}
+                    coordinate={m.coord}
+                    onPress={() => {
+                      const listing = listings.find(l => l.id === m.id);
+                      if (listing) {
+                        router.push({ pathname: '/listing-details', params: { source: 'host', id: listing.id } });
+                      }
+                    }}
                     anchor={{ x: 0.5, y: 1 }}
                   >
-                    <MarkerTag price={p.price} />
+                    <MarkerTag price={m.price} />
                   </Marker>
                 ))}
               </MapView>
             </>
           ) : (
-            <FlatList<Property>
-              data={mockProperties}
-              renderItem={({ item }) => <PropertyCard property={item} />}
+            <FlatList
+                data={listItems}
+                renderItem={({ item }) => <PropertyCard property={item} router={router} />}
               keyExtractor={(item) => item.id}
-              contentContainerStyle={styles.listContent}
+              ListEmptyComponent={
+                <View style={{ padding: 24, alignItems: 'center' }}>
+                  <Text>No listings yet. Create one in Host → Listings.</Text>
+                </View>
+              }
             />
           )}
 
@@ -320,17 +380,12 @@ export default function HomePage() {
             {viewMode === 'map' ? <List size={20} color="white" /> : <Map size={20} color="white" />}
           </TouchableOpacity>
 
-          {/* ⬇️ NEW: Locate-me button directly under the toggle */}
+          {/* Locate-me button under the toggle */}
           {viewMode === 'map' && (
-            <TouchableOpacity
-              style={styles.locateButton}
-              onPress={recenterToUser}
-              activeOpacity={0.85}
-            >
+            <TouchableOpacity style={styles.locateButton} onPress={recenterToUser} activeOpacity={0.85}>
               <LocateFixed size={18} color="white" />
             </TouchableOpacity>
           )}
-          {/* ⬆️ */}
         </View>
       </SafeAreaView>
 
@@ -343,20 +398,24 @@ export default function HomePage() {
           </TouchableOpacity>
         )}
         <View style={styles.footerRow}>
-          {/* --- MODIFICATION: Added onPress handler --- */}
-          <TouchableOpacity 
-            style={styles.footerButton}
-            onPress={() => router.push('/route')}
-          >
+          <TouchableOpacity style={styles.footerButton} onPress={() => router.push('/route')}>
             <Text style={styles.footerButtonText}>Plan a route →</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.footerButton}>
+          {/* <TouchableOpacity style={styles.footerButton}>
             <Text style={styles.footerButtonText}>Explore popular areas</Text>
-          </TouchableOpacity>
+          </TouchableOpacity> */}
         </View>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.popularAreasContainer}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.popularAreasContainer}
+        >
           {popularAreas.map((area) => (
-            <TouchableOpacity key={area} style={styles.popularAreaButton}>
+            <TouchableOpacity
+              key={area}
+              style={styles.popularAreaButton}    
+              onPress={() => flyToCity(area as typeof popularAreas[number])}
+            >
               <Text style={styles.popularAreaText}>{area}</Text>
             </TouchableOpacity>
           ))}
@@ -400,7 +459,7 @@ const styles = StyleSheet.create({
     borderColor: '#E6E8EC',
     borderRadius: 24,
     backgroundColor: '#F6F7F9',
-    justifyContent: 'center', // Added for TouchableOpacity
+    justifyContent: 'center',
   },
   searchInputPlaceholder: { fontSize: 16, color: '#9AA0A6' },
   searchIconWrap: {
@@ -459,8 +518,6 @@ const styles = StyleSheet.create({
     transform: [{ rotate: '45deg' }],
   },
 
-  listContent: { padding: 16, gap: 16 },
-
   // Toggle (top-right)
   viewToggleButton: {
     position: 'absolute',
@@ -480,10 +537,10 @@ const styles = StyleSheet.create({
     zIndex: 10,
   },
 
-  // NEW: Locate-me button (directly under the toggle)
+  // Locate-me button under the toggle
   locateButton: {
     position: 'absolute',
-    top: 20 + 48 + 12, // under the toggle (toggle top + toggle height + gap)
+    top: 20 + 48 + 12,
     right: 20,
     width: 44,
     height: 44,
@@ -499,29 +556,17 @@ const styles = StyleSheet.create({
     zIndex: 10,
   },
 
-  // “Listings in …” pill
-  locationBadge: {
-    position: 'absolute',
-    bottom: 20,
-    left: '50%',
-    transform: [{ translateX: -120 }],
-    paddingVertical: 10,
-    paddingHorizontal: 18,
-    backgroundColor: 'rgba(255,255,255,0.95)',
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
+  // Cards
+  card: {
+    backgroundColor: 'white',
+    borderRadius: 16,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 2,
-    elevation: 3,
-    zIndex: 10,
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+    overflow: 'hidden',
   },
-  locationBadgeText: { fontSize: 14, fontWeight: '600', color: '#111827' },
-
-  // Cards
-  card: { backgroundColor: 'white', borderRadius: 16, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4, elevation: 2, overflow: 'hidden' },
   cardContent: { flexDirection: 'row', padding: 12, gap: 12 },
   cardImage: { width: 96, height: 96, borderRadius: 12, backgroundColor: '#F3F4F6' },
   cardDetails: { flex: 1, justifyContent: 'space-between' },
@@ -539,13 +584,41 @@ const styles = StyleSheet.create({
   cardViewButtonText: { color: 'white', fontSize: 14, fontWeight: '500' },
 
   // Footer
-  footer: { backgroundColor: 'white', padding: 16, paddingBottom: 24, borderTopWidth: 1, borderTopColor: '#E6E8EC', gap: 12 },
-  findStaysButton: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', backgroundColor: '#0E1320', padding: 14, borderRadius: 16, gap: 8 },
+  footer: {
+    backgroundColor: 'white',
+    padding: 16,
+    paddingBottom: 24,
+    borderTopWidth: 1,
+    borderTopColor: '#E6E8EC',
+    gap: 12,
+  },
+  findStaysButton: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#0E1320',
+    padding: 14,
+    borderRadius: 16,
+    gap: 8,
+  },
   findStaysButtonText: { color: 'white', fontSize: 16, fontWeight: '600' },
   footerRow: { flexDirection: 'row', gap: 12 },
-  footerButton: { flex: 1, borderWidth: 1, borderColor: '#E6E8EC', padding: 12, borderRadius: 14, alignItems: 'center' },
+  footerButton: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#E6E8EC',
+    padding: 12,
+    borderRadius: 14,
+    alignItems: 'center',
+  },
   footerButtonText: { color: '#0E1320', fontWeight: '500' },
-  popularAreasContainer: { flexDirection: 'row', gap: 8, paddingTop: 4 },
-  popularAreaButton: { backgroundColor: '#F1F2F5', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999 },
-  popularAreaText: { fontSize: 14, color: '#374151' },
+  popularAreasContainer: { flexDirection: 'row', gap: 8 },
+  popularAreaButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: '#E6E8EC',
+    borderRadius: 16,
+  },
+  popularAreaText: { color: '#111827' },
 });

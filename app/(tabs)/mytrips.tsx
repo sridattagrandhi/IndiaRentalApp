@@ -1,8 +1,10 @@
 // app/(tabs)/mytrips.tsx
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { addDays, differenceInDays, format, isFuture, isPast } from 'date-fns';
+import { addDays, differenceInDays, format, isFuture } from 'date-fns';
 import { Image } from 'expo-image';
+import * as Print from 'expo-print';
 import { Stack, useFocusEffect, useRouter } from 'expo-router';
+import * as Sharing from 'expo-sharing';
 import {
   ArrowLeft,
   Calendar,
@@ -32,6 +34,8 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+
+const CONFIRMED_TRIPS_KEY = '@confirmed_trips';
 
 /** Types & mock data unchanged **/
 interface Trip {
@@ -378,13 +382,11 @@ export default function MyTripsPage() {
   const router = useRouter();
   const [activeTab, setActiveTab] =
     useState<'upcoming' | 'past' | 'mytrips'>('upcoming');
+  const [confirmedTrips, setConfirmedTrips] = useState<Trip[]>([]);
 
-  const upcomingTrips = mockTrips.filter(
-    (trip) => trip.status === 'upcoming' && isFuture(trip.checkIn)
-  );
-  const pastTrips = mockTrips.filter(
-    (trip) => trip.status === 'completed' || isPast(trip.checkOut)
-  );
+  const upcomingTrips = confirmedTrips.filter(t => t.status === 'upcoming' && isFuture(t.checkIn));
+  const pastTrips = confirmedTrips.filter(t => t.status !== 'upcoming' || !isFuture(t.checkIn));
+
 
   const [tripLists, setTripLists] = useState<TripList[]>([]);
   const [tripSaved, setTripSaved] = useState<TripSavedItem[]>([]);
@@ -396,6 +398,58 @@ export default function MyTripsPage() {
   const [newListDescription, setNewListDescription] = useState('');
   const [editingList, setEditingList] = useState<TripList | null>(null);
 
+  async function downloadTripReceipt(trip: Trip) {
+    const html = `
+    <html><head><meta name="viewport" content="initial-scale=1,width=device-width"/>
+    <style>
+      :root{--ink:#111827;--muted:#6B7280;--line:#E5E7EB;--bg:#FFF;--chip:#F3F4F6;--brand:#111827}
+      *{box-sizing:border-box}
+      body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;padding:24px;}
+      .doc{max-width:720px;margin:0 auto;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+      .hdr{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;background:#fafafa;border-bottom:1px solid var(--line)}
+      .brand{font-weight:700;letter-spacing:.2px;color:var(--brand)}
+      .code{font-monospace:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;background:var(--chip);padding:6px 10px;border-radius:8px}
+      .sec{padding:20px}
+      .grid{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+      .card{border:1px solid var(--line);border-radius:10px;padding:16px}
+      h2{font-size:14px;margin:0 0 8px 0;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+      table{width:100%;border-collapse:collapse;margin-top:4px}
+      td{padding:6px 0;border-bottom:1px solid var(--line)}
+      tr:last-child td{border-bottom:none}
+      .total{font-weight:700}
+      .foot{padding:14px 20px;border-top:1px solid var(--line);font-size:12px;color:var(--muted);background:#fafafa}
+    </style></head>
+    <body>
+      <div class="doc">
+        <div class="hdr">
+          <div class="brand">UrbanNest • Booking Receipt</div>
+          <div class="code">Booking code: ${trip.bookingCode}</div>
+        </div>
+
+        <div class="sec grid">
+          <div class="card">
+            <h2>Guest & Stay</h2>
+            <div><strong>${trip.listingName}</strong></div>
+            <div class="muted" style="margin:6px 0">${trip.location}</div>
+            <div>Dates: <strong>${format(trip.checkIn,'yyyy-MM-dd')}</strong> → <strong>${format(trip.checkOut,'yyyy-MM-dd')}</strong></div>
+            <div>Guests: <strong>${trip.guests}</strong></div>
+          </div>
+          <div class="card">
+            <h2>Payment</h2>
+            <div>Status: <span style="background:#F3F4F6;padding:4px 8px;border-radius:999px">Paid</span></div>
+            <div>Total paid: <strong>₹${trip.totalPaid.toLocaleString('en-IN')}</strong></div>
+          </div>
+        </div>
+
+        <div class="foot">Re-download this receipt any time from My Trips → Upcoming/Past.</div>
+      </div>
+    </body></html>`;
+    const { uri } = await Print.printToFileAsync({ html });
+    if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Share receipt' });
+  }
+
+
+
   useFocusEffect(
     useCallback(() => {
       const load = async () => {
@@ -403,6 +457,8 @@ export default function MyTripsPage() {
         let loadedSaved = await getData(TRIP_SAVED_KEY, []);
         const listsExist = await AsyncStorage.getItem(TRIP_LISTS_KEY);
         const savedExist = await AsyncStorage.getItem(TRIP_SAVED_KEY);
+        const raw = await AsyncStorage.getItem(CONFIRMED_TRIPS_KEY);
+        const parsed: any[] = raw ? JSON.parse(raw) : [];
 
         if (!listsExist && !savedExist) {
           loadedLists = initialTripLists;
@@ -422,6 +478,12 @@ export default function MyTripsPage() {
 
         setTripLists(loadedLists);
         setTripSaved(loadedSaved);
+        const normalized: Trip[] = parsed.map(t => ({
+          ...t,
+          checkIn: new Date(t.checkIn),
+          checkOut: new Date(t.checkOut),
+        }));
+        setConfirmedTrips(normalized);
       };
       load();
     }, [])
@@ -617,7 +679,7 @@ export default function MyTripsPage() {
                 <Text style={styles.emptySubtitle}>Time to plan your next adventure!</Text>
                 <TouchableOpacity
                   style={styles.browseButton}
-                  onPress={() => useRouter().push('/(tabs)')}
+                  onPress={() => router.push('/(tabs)')}
                 >
                   <Text style={styles.browseButtonText}>Explore stays</Text>
                 </TouchableOpacity>
@@ -627,7 +689,7 @@ export default function MyTripsPage() {
                 <TripCard
                   key={trip.id}
                   trip={trip}
-                  onDownloadReceipt={() => Alert.alert('Download Receipt')}
+                  onDownloadReceipt={() => downloadTripReceipt(trip)}
                   onModifyDates={() => Alert.alert('Modify Dates')}
                   onGetDirections={() => Alert.alert('Get Directions')}
                   onMessageHost={() => Alert.alert('Message Host')}
@@ -647,7 +709,7 @@ export default function MyTripsPage() {
                 trip={trip}
                 onRebook={() => Alert.alert('Rebook')}
                 onReview={() => Alert.alert('Review')}
-                onDownloadReceipt={() => Alert.alert('Download Receipt')}
+                onDownloadReceipt={() => downloadTripReceipt(trip)}
               />
             ))
           )}

@@ -3,33 +3,35 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Image } from 'expo-image';
 import { Stack, useFocusEffect, useRouter } from 'expo-router';
 import {
-    ArrowLeft, // Ensure this is imported
-    Edit, FolderPlus,
-    Heart,
-    MapPin,
-    MoreHorizontal,
-    Plus,
-    Star, Trash2,
-    X
+  ArrowLeft, // Ensure this is imported
+  Edit, FolderPlus,
+  Heart,
+  MapPin,
+  MoreHorizontal,
+  Plus,
+  Star, Trash2,
+  X
 } from 'lucide-react-native';
 import React, { useCallback, useState } from 'react';
 import {
-    Alert,
-    FlatList,
-    Modal,
-    SafeAreaView, // Use SafeAreaView for the main views
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  Alert,
+  FlatList,
+  Modal,
+  SafeAreaView, // Use SafeAreaView for the main views
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useListings } from '../context/ListingsContext';
 
 // --- Interfaces ---
 interface SavedProperty {
   id: string;
+  listingId?: string;  
   name: string;
   location: string;
   price: number;
@@ -155,6 +157,7 @@ function PropertyCard({ property, onRemove, onClick }: PropertyCardProps) {
 // --- Main Wishlist Page ---
 export default function WishlistPage() {
   const router = useRouter();
+  const { listings } = useListings();
   const insets = useSafeAreaInsets();
   const [wishlists, setWishlists] = useState<Wishlist[]>([]);
   const [savedProperties, setSavedProperties] = useState<SavedProperty[]>([]);
@@ -164,6 +167,7 @@ export default function WishlistPage() {
   const [newListName, setNewListName] = useState('');
   const [newListDescription, setNewListDescription] = useState('');
   const [editingList, setEditingList] = useState<Wishlist | null>(null);
+  const BENGALURU = { latitude: 12.9716, longitude: 77.5946 };
 
   // --- Load Data on Focus ---
   useFocusEffect(
@@ -291,8 +295,45 @@ export default function WishlistPage() {
               <PropertyCard
                 property={item}
                 onRemove={() => handleRemoveProperty(item.id)}
-                // Navigate to listing details - adjust params as needed
-                onClick={() => router.push({ pathname: '/listing-details', params: { listingId: item.id } })}
+                onClick={() => {
+                  // try to resolve the full host listing
+                  const l = listings.find(
+                    x => x.id === item.listingId || x.id === item.id
+                  );
+
+                  if (l) {
+                    // if we have a real host listing, use the host route
+                    router.push({
+                      pathname: '/listing-details',
+                      params: { source: 'host', id: l.id },
+                    });
+                    return;
+                  }
+
+                  // otherwise, fall back to a rich payload (map like search.tsx)
+                  const payload = {
+                    id: item.id,
+                    name: item.name,
+                    location: item.location,
+                    price: item.price,
+                    rating: item.rating ?? 0,
+                    distance: '',
+                    image: item.image,
+                    images: item.image ? [item.image] : [],
+                    features: [], // optional chips
+                    type: 'room', // harmless for your UI
+                    instantBook: false,
+                    coordinates: item.coordinates
+                      ? { latitude: item.coordinates.latitude, longitude: item.coordinates.longitude }
+                      : undefined,
+                  };
+
+                  router.push({
+                    pathname: '/listing-details',
+                    params: { source: 'mock', payload: encodeURIComponent(JSON.stringify(payload)) },
+                  });
+                }}
+
               />
             )}
             contentContainerStyle={styles.listContent}

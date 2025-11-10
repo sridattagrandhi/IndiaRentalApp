@@ -16,7 +16,9 @@ const config: ExpoConfig = {
     bundleIdentifier: 'com.sridatta.uberairbnb',
     infoPlist: {
         NSLocationWhenInUseUsageDescription:
-          "We need your location to find stays near you."
+          "We need your location to find stays near you.",
+        NSPhotoLibraryUsageDescription: "We need access to your photo library to add listing photos.",
+        NSPhotoLibraryAddUsageDescription: "We need permission to save photos you upload or edit."
     }
   },
   android: {

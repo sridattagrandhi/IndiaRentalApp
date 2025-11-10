@@ -1,4 +1,7 @@
 // app/(host)/create-listing.tsx
+import Constants from 'expo-constants';
+import { Image } from 'expo-image';
+import * as ImagePicker from 'expo-image-picker';
 import { Stack, useRouter } from 'expo-router';
 import {
   ArrowLeft, ArrowRight,
@@ -7,9 +10,30 @@ import {
 } from 'lucide-react-native';
 import React, { useState } from 'react';
 import {
-  Alert, Image, SafeAreaView, ScrollView, StyleSheet, Text, TextInput,
+  Alert,
+  FlatList,
+  Modal,
+  SafeAreaView, ScrollView, StyleSheet, Text, TextInput,
   TouchableOpacity, View
 } from 'react-native';
+import { computeBuildingKey, Listing, useListings } from '../../context/ListingsContext';
+
+const GEOAPIFY_API_KEY = Constants.expoConfig?.extra?.GEOAPIFY_API_KEY;
+
+async function geocodeAddress({ address, city, state, pincode }: {address?: string; city?: string; state?: string; pincode?: string}) {
+  const q = [address, city, state, pincode].filter(Boolean).join(', ');
+  if (!q || !GEOAPIFY_API_KEY) return undefined;
+  try {
+    const url = `https://api.geoapify.com/v1/geocode/search?text=${encodeURIComponent(q)}&limit=1&apiKey=${GEOAPIFY_API_KEY}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    const f = data?.features?.[0]?.geometry?.coordinates; // [lon, lat]
+    if (Array.isArray(f) && f.length >= 2) {
+      return { latitude: f[1], longitude: f[0] };
+    }
+  } catch {}
+  return undefined;
+}
 
 // --- Types and Constants ---
 type StepId =
@@ -30,6 +54,17 @@ const steps: StepConfig[] = [
   { id: 'review', title: 'Review', icon: <Check size={18} color="#4B5563" /> },
 ];
 
+const CITY_CENTER: Record<string, { lat: number; lon: number }> = {
+  'bengaluru': { lat: 12.9716, lon: 77.5946 },
+  'bangalore': { lat: 12.9716, lon: 77.5946 },
+  'mumbai': { lat: 19.0760, lon: 72.8777 },
+  'delhi': { lat: 28.6139, lon: 77.2090 },
+  'hyderabad': { lat: 17.3850, lon: 78.4867 },
+  'chennai': { lat: 13.0827, lon: 80.2707 },
+  'kolkata': { lat: 22.5726, lon: 88.3639 },
+  'pune': { lat: 18.5204, lon: 73.8567 },
+};
+
 const ProgressBar = ({ value }: { value: number }) => (
   <View style={styles.progressWrap}>
     <View style={[styles.progressTrack]}>
@@ -38,7 +73,6 @@ const ProgressBar = ({ value }: { value: number }) => (
   </View>
 );
 
-// --- Main ---
 export default function CreateListingPage() {
   const router = useRouter();
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
@@ -56,7 +90,23 @@ export default function CreateListingPage() {
     cleaningFee: '', securityDeposit: '',
     checkInTime: '14:00', checkOutTime: '11:00',
     rules: [] as string[],
+
+    // building inputs
+    buildingLabel: '',       // visible only for Apartment/Studio
+    unitName: '',            // comma-separated; visible only for Apartment/Studio
   });
+
+  const { addListing, listings } = useListings();
+
+  // If unitName omitted, auto-increment within the same buildingLabel+location
+  function nextUnitNameFor(buildingLabel?: string, location?: string) {
+    if (!buildingLabel) return '';
+    const n = listings.filter(
+      l => (l.buildingLabel || '').trim().toLowerCase() === (buildingLabel || '').trim().toLowerCase()
+        && (l.location || '').trim().toLowerCase() === (location || '').trim().toLowerCase()
+    ).length;
+    return `Unit ${n + 1}`;
+  }
 
   const updateData = (updates: Partial<typeof listingData>) =>
     setListingData(prev => ({ ...prev, ...updates }));
@@ -78,20 +128,111 @@ export default function CreateListingPage() {
     else setCurrentStepIndex(i => Math.max(0, i - 1));
   };
 
-  const handleComplete = () => {
-    Alert.alert('Listing Submitted', 'Your listing is under review.');
+  function buildLocation(city?: string, state?: string) {
+    return `${city || ''}, ${state || ''}`.replace(/^,\s*|\s*,\s*$/g, '');
+  }
+
+  function parseUnits(raw: string): string[] {
+    return (raw || '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
+  }
+
+  function makeListingBase(overrides: Partial<Listing> = {}): Listing {
+    const location = buildLocation(listingData.city, listingData.state);
+    const key = (listingData.city || '').trim().toLowerCase();
+    const center = CITY_CENTER[key];
+
+    return {
+      id: Date.now().toString() + Math.random().toString(36).slice(2, 6),
+      title: listingData.title || 'Untitled Listing',
+      location,
+      address: listingData.address || undefined,
+      image: listingData.photos?.[0] || 'https://source.unsplash.com/400x400/?apartment,interior',
+      images: listingData.photos?.length ? listingData.photos : undefined,       // ← NEW
+      rules: listingData.rules?.length ? listingData.rules : undefined,          // ← NEW
+      prohibited: (listingData as any).prohibited?.length ? (listingData as any).prohibited : undefined, // ← NEW (if your Rules step collects this)
+      status: 'live',
+      pricePerNight: parseInt(String(listingData.basePrice || 0), 10) || 0,
+      rating: 0,
+      reviewCount: 0,
+      amenities: listingData.amenities?.length ? listingData.amenities : [],
+      buildingLabel: listingData.buildingLabel || undefined,
+      buildingKey: computeBuildingKey(listingData.address, listingData.city, listingData.state, listingData.pincode) || undefined,
+      coords: overrides.coords ?? undefined,
+      maxGuests: Math.max(1, listingData.guests || 1),
+      ...overrides,
+    };
+  }
+
+
+
+  const isUnitBased = ['apartment', 'studio'].includes((listingData.propertyType || '').toLowerCase());
+  async function buildCoordsIfAny() {
+    return await geocodeAddress({
+      address: listingData.address,
+      city: listingData.city,
+      state: listingData.state,
+      pincode: listingData.pincode,
+    });
+  }
+
+  const handleComplete = async () => {
+    const coords = await buildCoordsIfAny();
+    const location = buildLocation(listingData.city, listingData.state);
+
+    if (isUnitBased) {
+      const units = parseUnits(listingData.unitName);
+      if (units.length === 0) {
+        const singleUnit = nextUnitNameFor(listingData.buildingLabel, location);
+        addListing(makeListingBase({ unitName: singleUnit || undefined, coords }));
+      } else {
+        units.forEach(u => addListing(makeListingBase({ unitName: u, coords })));
+      }
+    } else {
+      addListing(makeListingBase({ unitName: undefined, buildingLabel: undefined, coords }));
+    }
     router.replace('/(host)/listings');
   };
 
-  const handleSaveDraft = () => {
-    Alert.alert('Draft Saved', 'Your progress has been saved.');
+  const handleSaveDraft = async () => {
+    const coords = await buildCoordsIfAny();
+    const location = buildLocation(listingData.city, listingData.state);
+
+    if (isUnitBased) {
+      const units = parseUnits(listingData.unitName);
+      if (units.length === 0) {
+        const singleUnit = nextUnitNameFor(listingData.buildingLabel, location);
+        addListing({ ...makeListingBase({ unitName: singleUnit || undefined, coords }), status: 'draft', calendar: {}, bookings: [] });
+      } else {
+        units.forEach(u => addListing({ ...makeListingBase({ unitName: u, coords }), status: 'draft' }));
+      }
+    } else {
+      addListing({ ...makeListingBase({ unitName: undefined, buildingLabel: undefined, coords }), status: 'draft' });
+    }
     router.replace('/(host)/listings');
   };
 
   const renderStepContent = () => {
     switch (currentStep) {
       case 'property-type':
-        return <PropertyTypeStep value={listingData.propertyType} onChange={(v) => updateData({ propertyType: v })} />;
+        return (
+          <PropertyTypeStep
+            value={listingData.propertyType}
+            onChange={(v) => {
+              // If switching to non unit-based type, clear building/unit inputs
+              setListingData(prev => ({
+                ...prev,
+                propertyType: v,
+                ...( ['apartment', 'studio'].includes(v.toLowerCase())
+                  ? {}
+                  : { unitName: '', buildingLabel: '' }
+                ),
+              }));
+            }}
+          />
+        );
       case 'location':
         return <LocationStep data={listingData} onChange={updateData} />;
       case 'details':
@@ -198,11 +339,39 @@ function PropertyTypeStep({ value, onChange }: { value: string; onChange: (v: st
 }
 
 function LocationStep({ data, onChange }: { data: any; onChange: (u: any) => void }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+
+  const STATES = [
+    'Andhra Pradesh','Arunachal Pradesh','Assam','Bihar','Chhattisgarh','Goa','Gujarat','Haryana',
+    'Himachal Pradesh','Jharkhand','Karnataka','Kerala','Madhya Pradesh','Maharashtra','Manipur',
+    'Meghalaya','Mizoram','Nagaland','Odisha','Punjab','Rajasthan','Sikkim','Tamil Nadu','Telangana',
+    'Tripura','Uttar Pradesh','Uttarakhand','West Bengal',
+    'Andaman and Nicobar Islands','Chandigarh','Dadra & Nagar Haveli and Daman & Diu','Delhi (NCT)',
+    'Jammu & Kashmir','Ladakh','Lakshadweep','Puducherry'
+  ];
+
+  const filtered = STATES.filter(s => s.toLowerCase().includes(query.toLowerCase()));
+  const ITEM_HEIGHT = 56;
+
+  // show near currently-selected (or Karnataka as a sensible default)
+  const baseList = filtered.length ? filtered : STATES;
+  const selectedIndex = Math.max(
+    0,
+    baseList.findIndex(s => s === (data.state || 'Karnataka')) - 3
+  );
+
+  const selectState = (s: string) => {
+    onChange({ state: s });
+    setOpen(false);
+  };
+
   return (
     <View style={styles.stepContainer}>
       <Text style={styles.stepTitle}>Where’s your property?</Text>
       <Text style={styles.stepSubtitle}>Guests get the exact address after booking</Text>
 
+      {/* Address */}
       <View style={styles.inputGroup}>
         <Text style={styles.label}>Street Address</Text>
         <TextInput
@@ -213,37 +382,101 @@ function LocationStep({ data, onChange }: { data: any; onChange: (u: any) => voi
         />
       </View>
 
+      {/* City + State */}
       <View style={styles.row}>
         <View style={[styles.inputGroup, { flex: 1 }]}>
           <Text style={styles.label}>City</Text>
           <TextInput
             style={styles.input}
-            placeholder="e.g., Bangalore"
+            placeholder="e.g., Bengaluru"
             value={data.city}
             onChangeText={(t) => onChange({ city: t })}
           />
         </View>
+
         <View style={[styles.inputGroup, { flex: 1 }]}>
           <Text style={styles.label}>State</Text>
-          <TouchableOpacity style={styles.input} onPress={() => Alert.alert('Select State', 'Implement Picker')}>
+          <TouchableOpacity style={[styles.input, styles.inputButton]} onPress={() => setOpen(true)}>
             <Text style={data.state ? styles.inputText : styles.inputPlaceholder}>
               {data.state || 'Select State'}
             </Text>
+            <ChevronDown size={16} color="#6B7280" />
           </TouchableOpacity>
         </View>
       </View>
 
+      {/* PIN */}
       <View style={styles.inputGroup}>
         <Text style={styles.label}>PIN Code</Text>
         <TextInput
           style={styles.input}
-          placeholder="e.g., 560001"
+          placeholder="e.g., 560038"
           keyboardType="number-pad"
           maxLength={6}
           value={data.pincode}
           onChangeText={(t) => onChange({ pincode: t.replace(/[^0-9]/g, '') })}
         />
       </View>
+
+      {/* Bottom Sheet Modal */}
+      <Modal visible={open} animationType="fade" transparent onRequestClose={() => setOpen(false)}>
+        {/* backdrop */}
+        <TouchableOpacity activeOpacity={1} style={styles.modalBackdrop} onPress={() => setOpen(false)} />
+        {/* sheet */}
+        <View style={styles.sheet}>
+          <View style={styles.sheetHandle} />
+          <Text style={styles.sheetTitle}>Select State</Text>
+
+          {/* Search */}
+          <View style={styles.inputGroup}>
+            <TextInput
+              style={styles.input}
+              placeholder="Search state..."
+              value={query}
+              onChangeText={setQuery}
+            />
+          </View>
+
+          {/* Scrollable list with initial scroll */}
+          <View style={styles.sheetBody}>
+            <FlatList
+              data={filtered}
+              keyExtractor={(s) => s}
+              initialScrollIndex={Math.max(0, selectedIndex)}
+              getItemLayout={(_, index) => ({
+                length: ITEM_HEIGHT,
+                offset: ITEM_HEIGHT * index,
+                index,
+              })}
+              renderItem={({ item }) => {
+                const selected = item === data.state;
+                return (
+                  <TouchableOpacity
+                    style={[styles.optionRow, { height: ITEM_HEIGHT }, selected && styles.optionRowSelected]}
+                    onPress={() => selectState(item)}
+                  >
+                    <Text style={[styles.optionText, selected && styles.optionTextSelected]}>{item}</Text>
+                    {selected && <Check size={16} color="#111827" />}
+                  </TouchableOpacity>
+                );
+              }}
+              ListEmptyComponent={
+                <View style={styles.emptyOption}>
+                  <Text style={styles.muted}>No matches</Text>
+                </View>
+              }
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={styles.sheetList}
+            />
+          </View>
+
+          <View style={styles.sheetFooter}>
+            <TouchableOpacity style={styles.sheetCancel} onPress={() => setOpen(false)}>
+              <Text style={styles.sheetCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -316,9 +549,31 @@ function AmenitiesStep({ selected, onChange }: { selected: string[]; onChange: (
 }
 
 function PhotosStep({ photos, onChange }: { photos: string[]; onChange: (p: string[]) => void }) {
-  const add = async () => {
-    Alert.alert('Upload Photo', 'Implement image picker');
+  const MAX_TOTAL = 15;
+
+  const pickFromLibrary = async () => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (perm.status !== 'granted') {
+      Alert.alert('Permission required', 'Please allow photo library access to upload photos.');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsMultipleSelection: true,
+      selectionLimit: Math.max(1, MAX_TOTAL - photos.length),
+      quality: 0.85,
+      exif: false,
+      orderedSelection: true,
+    });
+
+    if (result.canceled) return;
+
+    const added = result.assets?.map(a => a.uri).filter(Boolean) ?? [];
+    const next = Array.from(new Set([...photos, ...added])).slice(0, MAX_TOTAL);
+    onChange(next);
   };
+
   const remove = (i: number) => onChange(photos.filter((_, idx) => idx !== i));
 
   return (
@@ -328,29 +583,41 @@ function PhotosStep({ photos, onChange }: { photos: string[]; onChange: (p: stri
 
       <View style={styles.photosGrid}>
         {photos.map((uri, i) => (
-          <View key={i} style={styles.photoBox}>
+          <View key={uri} style={styles.photoBox}>
             <Image source={{ uri }} style={styles.photoImg} />
             <TouchableOpacity style={styles.photoRemove} onPress={() => remove(i)}>
               <X size={14} color="white" />
             </TouchableOpacity>
-            {i === 0 && <View style={styles.coverBadge}><Text style={styles.coverBadgeText}>Cover</Text></View>}
+            {i === 0 && (
+              <View style={styles.coverBadge}>
+                <Text style={styles.coverBadgeText}>Cover</Text>
+              </View>
+            )}
           </View>
         ))}
 
-        <TouchableOpacity style={styles.photoAdd} onPress={add}>
-          <Upload size={30} color="#6B7280" />
-          <Text style={styles.photoAddText}>Upload photo</Text>
-        </TouchableOpacity>
+        {photos.length < MAX_TOTAL && (
+          <TouchableOpacity style={styles.photoAdd} onPress={pickFromLibrary}>
+            <Upload size={30} color="#6B7280" />
+            <Text style={styles.photoAddText}>
+              Upload photo{MAX_TOTAL - photos.length > 1 ? 's' : ''} ({MAX_TOTAL - photos.length} left)
+            </Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       {!!photos.length && (
-        <Text style={styles.photoCount}>{photos.length} photo{photos.length !== 1 ? 's' : ''} uploaded</Text>
+        <Text style={styles.photoCount}>
+          {photos.length} photo{photos.length !== 1 ? 's' : ''} uploaded
+        </Text>
       )}
     </View>
   );
 }
 
 function TitleDescriptionStep({ data, onChange }: { data: any; onChange: (u: any) => void }) {
+  const isUnitBased = ['apartment', 'studio'].includes((data.propertyType || '').toLowerCase());
+
   return (
     <View style={styles.stepContainer}>
       <Text style={styles.stepTitle}>Title & Description</Text>
@@ -367,6 +634,31 @@ function TitleDescriptionStep({ data, onChange }: { data: any; onChange: (u: any
         />
         <Text style={styles.charCount}>{data.title.length}/60</Text>
       </View>
+
+      {/* Only for Apartment / Studio */}
+      {isUnitBased && (
+        <>
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>Building Name</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="e.g., Sunrise Apartments"
+              value={data.buildingLabel}
+              onChangeText={(t) => onChange({ buildingLabel: t })}
+            />
+          </View>
+
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>Unit Number(s)</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="e.g., A-203 or A-101, A-102"
+              value={data.unitName}
+              onChangeText={(t) => onChange({ unitName: t })}
+            />
+          </View>
+        </>
+      )}
 
       <View style={styles.inputGroup}>
         <Text style={styles.label}>Description</Text>
@@ -479,6 +771,8 @@ function RulesStep({ data, onChange }: { data: any; onChange: (u: any) => void }
 }
 
 function ReviewStep({ data }: { data: any }) {
+  const isUnitBased = ['apartment', 'studio'].includes((data.propertyType || '').toLowerCase());
+
   const Row = ({ label, value }: { label: string; value: string | number }) => (
     <View style={styles.reviewRow}>
       <Text style={styles.reviewLabel}>{label}:</Text>
@@ -498,6 +792,8 @@ function ReviewStep({ data }: { data: any }) {
         <Row label="Guests" value={data.guests} />
         <Row label="Bedrooms" value={data.bedrooms} />
         <Row label="Bathrooms" value={data.bathrooms} />
+        {isUnitBased && <Row label="Building" value={data.buildingLabel || 'N/A'} />}
+        {isUnitBased && <Row label="Units" value={data.unitName || 'N/A'} />}
       </View>
 
       <View style={styles.reviewCard}>
@@ -534,6 +830,7 @@ function ReviewStep({ data }: { data: any }) {
     </View>
   );
 }
+
 
 // =========================
 // Styles
@@ -690,20 +987,74 @@ const styles = StyleSheet.create({
   backBtnText: { color: '#111827', fontWeight: '700' },
   nextBtn: { flex: 1, backgroundColor: '#111827' },
   nextBtnText: { color: '#fff', fontWeight: '800' },
-});
 
-// Minimal placeholders (keep as-is)
-const Select = ({ children, ...props }: any) => <View {...props}>{children}</View>;
-const SelectTrigger = ({ children, ...props }: any) => (
-  <TouchableOpacity {...props}>
-    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-      {children}
-      <ChevronDown size={16} />
-    </View>
-  </TouchableOpacity>
-);
-const SelectValue = ({ placeholder }: any) => <Text style={styles.inputPlaceholder}>{placeholder}</Text>;
-const SelectContent = ({ children, ...props }: any) => <View {...props}>{children}</View>;
-const SelectItem = ({ children, value, ...props }: any) => (
-  <TouchableOpacity {...props}><Text>{children}</Text></TouchableOpacity>
-);
+  // Picker sheet styles
+  inputButton: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingRight: 12,
+  },
+  modalBackdrop: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.25)',
+  },
+  sheet: {
+    position: 'absolute',
+    left: 0, right: 0, bottom: 0,
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 12,
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: -4 },
+    elevation: 12,
+  },
+  sheetHandle: {
+    alignSelf: 'center',
+    width: 42, height: 5,
+    borderRadius: 999,
+    backgroundColor: '#E5E7EB',
+    marginBottom: 8,
+  },
+  sheetTitle: {
+    fontSize: 16, fontWeight: '700', color: '#111827',
+    textAlign: 'center', marginBottom: 8,
+  },
+  sheetBody: { maxHeight: 420 },
+  sheetList: { paddingBottom: 8 },
+
+  optionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    marginBottom: 8,
+  },
+  optionRowSelected: {
+    borderColor: '#111827',
+    backgroundColor: '#F9FAFB',
+  },
+  optionText: { fontSize: 15, color: '#111827' },
+  optionTextSelected: { fontWeight: '700' },
+
+  emptyOption: { alignItems: 'center', paddingVertical: 16 },
+
+  sheetFooter: {
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#EEEFF3',
+  },
+  sheetCancel: {
+    alignSelf: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  sheetCancelText: { color: '#111827', fontWeight: '700' },
+});

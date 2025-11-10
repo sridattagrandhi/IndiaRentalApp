@@ -4,7 +4,7 @@ import Slider from '@react-native-community/slider';
 import { format, parseISO } from 'date-fns';
 import Constants from 'expo-constants';
 import { Image } from 'expo-image';
-import { Link, Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import {
   ArrowLeft, Calendar as CalendarIcon, Check, ChevronDown, List, Map, MapPin, Minus, Plus,
   SlidersHorizontal, Star, Users, X
@@ -30,6 +30,10 @@ import * as Location from 'expo-location';
 import { LocateFixed } from 'lucide-react-native';
 // ⬆️⬆️
 
+import { useListings } from './context/ListingsContext';
+
+
+
 // ---- Height constants ----
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const BOTTOM_SHEET_MIN_HEIGHT = SCREEN_HEIGHT * 0.15;
@@ -43,7 +47,8 @@ const GEOAPIFY_GEOCODE_URL = `https://api.geoapify.com/v1/geocode/search?apiKey=
 interface Property {
   id: string; name: string; location: string; price: number; rating: number;
   distance: string; image: string; features: string[]; type: 'room' | 'home' | 'hotel';
-  instantBook: boolean; coordinates: { latitude: number; longitude: number; };
+  instantBook: boolean; coordinates?: { latitude: number; longitude: number };
+  __hostId?: string;  // Optional host ID for host-owned properties
 }
 
 const mockProperties: Property[] = [
@@ -54,11 +59,13 @@ const mockProperties: Property[] = [
   { id: '5', name: 'Quiet Retreat', location: 'Jayanagar, Bangalore', price: 2800, rating: 4.6, distance: '5.0 km', image: 'https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?w=400&h=400&fit=crop', features: ['Garden', 'WiFi'], type: 'home', instantBook: false, coordinates: { latitude: 12.9250, longitude: 77.5800 } },
 ];
 
+
+
 const mockRegion: Region = { latitude: 12.9716, longitude: 77.5946, latitudeDelta: 0.3, longitudeDelta: 0.3, };
 const sortOptions = ['Best match', 'Lowest price', 'Highest rated', 'Closest'];
 
 // --- Components ---
-const PropertyCard = ({ property }: { property: Property }) => (
+const PropertyCard = ({ property, router }: { property: Property; router: ReturnType<typeof useRouter> }) => (
   <View style={styles.card}>
     <Image source={{ uri: property.image }} style={styles.cardImage}
       placeholder={{ blurhash: 'L0A,l#~q00D%~qD%00%M00?b-;%M' }} transition={300} />
@@ -91,11 +98,21 @@ const PropertyCard = ({ property }: { property: Property }) => (
           ₹{property.price.toLocaleString('en-IN')}
           <Text style={styles.cardPriceNight}>/night</Text>
         </Text>
-        <Link href="/listing-details" asChild>
-          <TouchableOpacity style={styles.cardViewButton}>
-            <Text style={styles.cardViewButtonText}>View</Text>
-          </TouchableOpacity>
-        </Link>
+        <TouchableOpacity
+          style={styles.cardViewButton}
+          onPress={() => {
+            if (property.__hostId) {
+              router.push({ pathname: '/listing-details', params: { source: 'host', id: property.__hostId } });
+            } else {
+              router.push({
+                pathname: '/listing-details',
+                params: { source: 'mock', payload: encodeURIComponent(JSON.stringify(property)) },
+              });
+            }
+          }}
+        >
+          <Text style={styles.cardViewButtonText}>View</Text>
+        </TouchableOpacity>
       </View>
     </View>
   </View>
@@ -218,7 +235,7 @@ function FilterPanel(props: FilterPanelProps) {
 
         <View style={styles.modalFooter}>
           <TouchableOpacity style={styles.clearButton} onPress={clearFilters}><Text style={styles.clearButtonText}>Clear all</Text></TouchableOpacity>
-          <TouchableOpacity style={styles.showButton} onPress={applyFilters}><Text style={styles.showButtonText}>Show {filteredCount} results</Text></TouchableOpacity>
+          <TouchableOpacity style={styles.showButton} onPress={applyFilters}><Text style={styles.showButtonText}>Show results</Text></TouchableOpacity>
         </View>
       </SafeAreaView>
     </Modal>
@@ -420,6 +437,7 @@ export default function SearchPage() {
   const [instantBookOnly, setInstantBookOnly] = useState(false);
   const [radiusKm, setRadiusKm] = useState(10);
   const [filteredProperties, setFilteredProperties] = useState(mockProperties);
+  const { listings } = useListings();
 
   // ---- Bottom sheet sizing & animation ----
   const [maxSheetHeight, setMaxSheetHeight] = useState(DEFAULT_MAX_HEIGHT);
@@ -429,6 +447,40 @@ export default function SearchPage() {
   const translateY = useSharedValue(0);
   const context = useSharedValue({ y: 0 });
   const INITIAL_TRANSLATE_Y = -BOTTOM_SHEET_MIN_HEIGHT;
+
+  const hostProperties: Property[] = React.useMemo(() => {
+    return listings.map((l) => ({
+      id: l.id,
+      name: l.title,
+      // show exact address if we have it, otherwise city/state
+      location: l.address ? `${l.address}, ${l.location}` : l.location,
+      price: l.pricePerNight,
+      rating: l.rating || 0,
+      distance: '', // can compute later if you want
+      image: l.image,
+      // show up to 3 amenity chips
+      features: (l.amenities ?? []).slice(0, 3),
+      // pick any type; your UI doesn't rely on this beyond filters
+      type: 'room',
+      instantBook: false,
+      // only present if coords exist (pins will render automatically)
+      coordinates: l.coords
+        ? { latitude: l.coords.latitude, longitude: l.coords.longitude }
+        : undefined,
+      __hostId: l.id,
+    }));
+  }, [listings]);
+
+  // host listings first, then mocks
+  const baseProperties: Property[] = React.useMemo(
+    () => [...hostProperties, ...mockProperties],
+    [hostProperties]
+  );
+
+  // keep filtered list in sync when listings change
+  useEffect(() => {
+    setFilteredProperties(baseProperties);
+  }, [baseProperties]);
 
   const clampHeightsFromLayout = (containerHeight: number) => {
     const allowedMax = Math.max(
@@ -523,8 +575,9 @@ export default function SearchPage() {
     }
   };
 
-  const applyFilters = () => {
+  const applyFilters = (sortOverride?: string) => {
     // Distance helper
+    const by = sortOverride ?? sortBy;
     const toRad = (d: number) => (d * Math.PI) / 180;
     const haversineKm = (a: { latitude: number; longitude: number }, b: { latitude: number; longitude: number }) => {
       const R = 6371;
@@ -538,7 +591,7 @@ export default function SearchPage() {
       return 2 * R * Math.asin(Math.sqrt(h));
     };
 
-    let out = [...mockProperties];
+    let out = [...baseProperties];
 
     // price
     out = out.filter((p) => p.price >= priceRange[0] && p.price <= priceRange[1]);
@@ -564,6 +617,7 @@ export default function SearchPage() {
     // radius from current region center (if defined)
     if (region) {
       out = out.filter((p) => {
+        if (!p.coordinates) return true; // keep items lacking coords in the list
         const km = haversineKm(
           { latitude: region.latitude, longitude: region.longitude },
           p.coordinates
@@ -573,13 +627,19 @@ export default function SearchPage() {
     }
 
     // sorting
-    const by = sortBy;
     const center = region;
-    const distCache = new globalThis.Map<string, number>();
-    const getDist = (p: typeof mockProperties[number]) => {
-      if (!center) return Number.MAX_SAFE_INTEGER;
+    // Cache for storing distances between properties and the center point
+    const distCache: Record<string, number> = {};
+
+    const getDist = (p: Property) => {
+      const center = region;
+      if (!center) return Number.POSITIVE_INFINITY;        // no center yet → treat as far
+      if (!p.coordinates) return Number.POSITIVE_INFINITY; // no coords → sort to the end
+
       const key = p.id;
-      if (distCache.has(key)) return distCache.get(key)!;
+      const cached = distCache[key];
+      if (cached !== undefined) return cached;
+
       const toRad = (d: number) => (d * Math.PI) / 180;
       const R = 6371;
       const dLat = toRad(p.coordinates.latitude - center.latitude);
@@ -588,13 +648,31 @@ export default function SearchPage() {
       const la2 = toRad(p.coordinates.latitude);
       const h = Math.sin(dLat / 2) ** 2 + Math.cos(la1) * Math.cos(la2) * Math.sin(dLon / 2) ** 2;
       const km = 2 * R * Math.asin(Math.sqrt(h));
-      distCache.set(key, km);
+
+      distCache[key] = km;
       return km;
     };
 
     if (by === 'Lowest price') out.sort((a, b) => a.price - b.price);
     else if (by === 'Highest rated') out.sort((a, b) => b.rating - a.rating);
-    else if (by === 'Closest') out.sort((a, b) => getDist(a) - getDist(b));
+    else if (by === 'Closest') {
+      const center = region;
+      const distCache = new globalThis.Map<string, number>();
+      const getDist = (p: Property) => {
+        if (!center || !p.coordinates) return Number.POSITIVE_INFINITY;
+        const toRad = (d: number) => (d * Math.PI) / 180;
+        const R = 6371;
+        const dLat = toRad(p.coordinates.latitude - center.latitude);
+        const dLon = toRad(p.coordinates.longitude - center.longitude);
+        const la1 = toRad(center.latitude);
+        const la2 = toRad(p.coordinates.latitude);
+        const h = Math.sin(dLat/2)**2 + Math.cos(la1)*Math.cos(la2)*Math.sin(dLon/2)**2;
+        const km = 2 * R * Math.asin(Math.sqrt(h));
+        return km;
+      };
+      out.sort((a, b) => getDist(a) - getDist(b));
+    }
+
     // 'Best match' = leave as-is for now.
 
     setFilteredProperties(out);
@@ -608,14 +686,14 @@ export default function SearchPage() {
     setMinRating('0');
     setInstantBookOnly(false);
     setRadiusKm(10);
-    setFilteredProperties(mockProperties);
+    setFilteredProperties(baseProperties); // ← was mockProperties
   };
 
   const onSelectSort = (opt: string) => {
     setSortBy(opt);
     setShowSortDropdown(false);
     // immediately sort current list for snappy UX
-    applyFilters();
+    applyFilters(opt);
   };
 
 
@@ -737,7 +815,8 @@ export default function SearchPage() {
             <View style={styles.contentArea} onLayout={onContentLayout}>
               {viewMode === 'list' && (
                 <FlatList
-                  data={filteredProperties} renderItem={({ item }) => <PropertyCard property={item} />}
+                  data={filteredProperties}
+                  renderItem={({ item }) => <PropertyCard property={item} router={router} />}
                   keyExtractor={item => item.id} contentContainerStyle={styles.listContent}
                   showsVerticalScrollIndicator={false}
                 />
@@ -753,8 +832,17 @@ export default function SearchPage() {
                       initialRegion={region}
                       region={region}
                     >
-                      {filteredProperties.map(prop => (
-                        <Marker key={prop.id} coordinate={prop.coordinates}>
+                      {filteredProperties.filter(p => p.coordinates).map((prop) => (
+                        <Marker
+                          key={prop.id}
+                          coordinate={prop.coordinates!}
+                          onPress={() => {
+                            const params = (prop as any).__hostId
+                              ? { source: 'host', id: (prop as any).__hostId }
+                              : { source: 'mock', payload: JSON.stringify(prop) };
+                            router.push({ pathname: '/listing-details', params });
+                          }}
+                        >
                           {renderPriceMarker(prop.price)}
                         </Marker>
                       ))}
@@ -775,7 +863,7 @@ export default function SearchPage() {
                     </GestureDetector>
                     <GestureFlatList
                       data={filteredProperties}
-                      renderItem={({ item }) => <PropertyCard property={item} />}
+                      renderItem={({ item }) => <PropertyCard property={item} router={router} />}
                       keyExtractor={item => item.id}
                       contentContainerStyle={styles.listContentBottomSheet}
                       style={styles.flatListInSheet}
