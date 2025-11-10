@@ -104,7 +104,7 @@ const MarkerTag = ({ price }: { price: number }) => (
 
 const PropertyCard = ({ property }: { property: Property }) => {
   const router = useRouter();
-  const go = (id: string) => router.push({ pathname: '/listing/[id]', params: { id } });
+  const go = (id: string) => router.push({ pathname: './listing/[id]', params: { id } });
   return (
     <TouchableOpacity style={styles.card} activeOpacity={0.9} onPress={() => go(property.id)}>
       <View style={styles.cardContent}>

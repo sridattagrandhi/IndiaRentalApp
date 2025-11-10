@@ -83,7 +83,7 @@ const sortOptions = ['Best match', 'Lowest price', 'Highest rated', 'Closest'];
 
 const PropertyCard = ({ property }: { property: Property }) => {
   const router = useRouter();
-  const go = () => router.push({ pathname: '/listing/[id]', params: { id: property.id } });
+  const go = () => router.push({ pathname: './listing/[id]', params: { id: property.id } });
 
   return (
     <TouchableOpacity style={styles.card} activeOpacity={0.92} onPress={go}>

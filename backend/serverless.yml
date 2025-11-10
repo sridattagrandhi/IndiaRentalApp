@@ -32,12 +32,12 @@ provider:
     DATABASE_URL: ${env:DATABASE_URL}
     DEBUG_ERRORS: "true"
     PHOTOS_BUCKET: ${self:custom.photosBucketName}
-  vpc:
+  vpc: 
     securityGroupIds:
-      - sg-095e7678a6d9a0f01
+      - sg-0123456789abcdef0
     subnetIds:
-      - subnet-03b642ce96bdf3a68
-      - subnet-04dce03efae18c39f
+      - subnet-aaaaaa
+      - subnet-bbbbbb
   iamRoleStatements:
     - Effect: Allow
       Action:
