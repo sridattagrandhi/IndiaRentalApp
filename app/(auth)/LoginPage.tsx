@@ -1,9 +1,11 @@
+import { useTranslation } from 'react-i18next';
 // app/(auth)/LoginPage.tsx
 import AuthContainer from '@/components/ui/authContainer';
 import AuthHeader from '@/components/ui/authHeader';
 import LabeledInput from '@/components/ui/labeledInput';
 import PrimaryButton from '@/components/ui/primaryButton';
 import SecondaryButton from '@/components/ui/secondaryButton';
+import { apiGet } from '@/services/api';
 import { styles } from '@/styles/login.styles';
 import { MaterialIcons } from '@expo/vector-icons';
 import { router } from 'expo-router';
@@ -30,6 +32,23 @@ import 'react-native-url-polyfill/auto';
 
 
 export default function LoginPage() {
+  const { t } = useTranslation();
+  const syncLanguageFromProfile = async () => {
+    try {
+      const prof = await apiGet('/v1/profile');
+      const lang = String(prof?.preferred_language || '').toLowerCase();
+      if (lang) {
+        await SecureStore.setItemAsync('preferred_language', lang);
+      } else {
+        const authLang = await SecureStore.getItemAsync('auth_language');
+        if (authLang) await SecureStore.setItemAsync('preferred_language', authLang);
+      }
+    } catch {
+      const authLang = await SecureStore.getItemAsync('auth_language');
+      if (authLang) await SecureStore.setItemAsync('preferred_language', authLang);
+    }
+  };
+
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
 
@@ -37,7 +56,7 @@ export default function LoginPage() {
   const handleLogin = async () => {
     try {
       if (!username || !password) {
-        Alert.alert('Missing Fields', 'Please enter your username/email and password.');
+        Alert.alert(t('auth.signup.alerts.missing_fields_title'), 'Please enter your username/email and password.');
         return;
       }
       const { idToken} = await signIn({ username, password });
@@ -46,6 +65,7 @@ export default function LoginPage() {
       await SecureStore.setItemAsync('idToken', idToken);
       // await SecureStore.setItemAsync('accessToken', accessToken); 
       await SecureStore.setItemAsync('username', username); // <-- store for phone OTP flow
+      await syncLanguageFromProfile();
       router.replace('/(tabs)');
     } catch (err: any) {
       Alert.alert('Login failed', err?.message ?? 'Please try again.');
@@ -87,30 +107,30 @@ export default function LoginPage() {
       <ScrollView showsVerticalScrollIndicator={false}>
         <AuthHeader
           icon={<MaterialIcons name="login" size={32} color="white" />}
-          title="Welcome Back"
-          subtitle="Login to your account"
+          title={t('auth.login.welcome_back')}
+          subtitle={t('auth.login.subtitle')}
         />
 
         <LabeledInput
-          label="Username or Email"
-          placeholder="Enter your username or email"
+          label={t('auth.login.username_or_email_label')}
+          placeholder={t('auth.login.username_or_email_placeholder')}
           value={username}
           onChangeText={setUsername}
           autoCapitalize="none"
         />
         <LabeledInput
-          label="Password"
-          placeholder="Enter your password"
+          label={t('settings.login_security.password')}
+          placeholder={t('auth.login.password_placeholder')}
           value={password}
           onChangeText={setPassword}
           isPassword
         />
 
-        <TouchableOpacity onPress={() => Alert.alert('Forgot Password?')}>
-          <Text style={styles.forgotPassword}>Forgot Password?</Text>
+        <TouchableOpacity onPress={() => Alert.alert(t('auth.login.forgot_password'))}>
+          <Text style={styles.forgotPassword}>{t('auth.login.forgot_password')}</Text>
         </TouchableOpacity>
 
-        <PrimaryButton title="Login" onPress={handleLogin} />
+        <PrimaryButton title={t('auth.login.login')} onPress={handleLogin} />
 
         {/* Divider */}
         <View style={styles.dividerContainer}>
@@ -122,33 +142,33 @@ export default function LoginPage() {
         {/* Social logins */}
         <View style={local.socialWrap}>
           <SocialButton
-            onPress={() => Alert.alert('Google Sign-In', 'Hook up OAuth or Cognito Hosted UI later')}
+            onPress={() => Alert.alert(t('auth.login.google_sign_in'), t('auth.login.oauth_later'))}
             icon={<AntDesign name="google" size={20} color="#111827" />}
-            label="Continue with Google"
+            label={t('auth.login.continue_with_google')}
           />
           <SocialButton
-            onPress={() => Alert.alert('Apple Sign-In', 'Hook up Apple auth later')}
+            onPress={() => Alert.alert(t('auth.login.apple_sign_in'), t('auth.login.hook_up_apple_later'))}
             icon={<Ionicons name="logo-apple" size={22} color="#111827" />}
-            label="Continue with Apple"
+            label={t('auth.login.continue_with_apple')}
           />
           <SocialButton
-            onPress={() => Alert.alert('Facebook Login', 'Hook up Facebook auth later')}
+            onPress={() => Alert.alert(t('auth.login.facebook_login'), t('auth.login.hook_up_facebook_later'))}
             icon={<FontAwesome name="facebook" size={22} color="#111827" />}
-            label="Continue with Facebook"
+            label={t('auth.login.continue_with_facebook')}
           />
           <SocialButton
-            onPress={() => Alert.alert('Instagram Login', 'Hook up Instagram OAuth later')}
+            onPress={() => Alert.alert(t('auth.login.instagram_login'), 'Hook up Instagram OAuth later')}
             icon={<FontAwesome name="instagram" size={22} color="#111827" />}
-            label="Continue with Instagram"
+            label={t('auth.login.continue_with_instagram')}
           />
           <SocialButton
-            onPress={() => Alert.alert('WhatsApp Login', 'Hook up WhatsApp flow later')}
+            onPress={() => Alert.alert(t('auth.login.whatsapp_login'), 'Hook up WhatsApp flow later')}
             icon={<FontAwesome name="whatsapp" size={22} color="#111827" />}
-            label="Continue with WhatsApp"
+            label={t('auth.login.continue_with_whatsapp')}
           />
         </View>
         <View style={local.footerCtaWrap}>
-          <Text style={local.mutedCtaText}>Don't have an account?</Text>
+          <Text style={local.mutedCtaText}>{t('auth.login.no_account')}</Text>
         </View>
         <SecondaryButton title="Create Account" onPress={handleCreateAccount} />
       </ScrollView>

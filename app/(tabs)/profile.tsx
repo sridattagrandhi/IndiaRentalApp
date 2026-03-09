@@ -1,5 +1,6 @@
 // app/(tabs)/profile.tsx
-import Constants from 'expo-constants';
+import { apiGet } from '@/services/api';
+import { useFocusEffect } from '@react-navigation/native';
 import { Href, Link, Stack, useRouter } from 'expo-router'; // useRouter is imported
 import * as SecureStore from 'expo-secure-store';
 import {
@@ -18,6 +19,7 @@ import {
   Shield
 } from 'lucide-react-native';
 import React, { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next'; // ✅ ADD THIS
 import { Alert, Image, SafeAreaView, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 // Helper component for Settings items
@@ -25,7 +27,7 @@ interface SettingsItemProps {
   icon: React.ReactNode;
   title: string;
   description: string;
-  href: Href; // Use href for Link navigation
+  href: Href;
 }
 
 function SettingsItem({ icon, title, description, href }: SettingsItemProps) {
@@ -48,7 +50,7 @@ function SettingsItem({ icon, title, description, href }: SettingsItemProps) {
 // Main Profile Screen
 export default function ProfileScreen() {
   const router = useRouter(); // Initialize router
-  // This state is now less critical for navigation but can be kept for UI elements on this page
+  const { t, i18n } = useTranslation();
   const [userRole, setUserRole] = useState<'guest' | 'host'>('guest');
 
   // Mock user data (adapt as needed)
@@ -57,54 +59,87 @@ export default function ProfileScreen() {
     email: '',
     phone: '',
     avatar: 'https://i.pravatar.cc/150?img=9',
+    preferred_language: 'en',
     isVerified: false,
     kycStatus: 'incomplete' as 'incomplete' | 'pending' | 'verified',
     bankVerified: false,
     propertyVerified: false
   });
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const token = await SecureStore.getItemAsync('idToken'); // whichever you pass to API Gateway
-        const res = await fetch(`${Constants.expoConfig?.extra?.API_URL}/v1/profile`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (!res.ok) throw new Error('Failed to load profile');
-        const p = await res.json();
+  const loadProfile = React.useCallback(async () => {
+    try {
+      const p = await apiGet('/v1/profile');
 
-        setUserData((prev) => ({
-          ...prev,
-          name: p.name || 'User',
-          email: p.email || '—',
-          phone: p.phone || '—',
-          avatar: p.avatar_url || prev.avatar,
-          isVerified: false,           // keep your existing flags for now
-          kycStatus: 'incomplete',
-          bankVerified: false,
-          propertyVerified: false,
-        }));
-      } catch (e) {
-        // You can show a toast or fallback silently
+      setUserData((prev) => ({
+        ...prev,
+        name: p.name || 'User',
+        email: p.email || '—',
+        phone: p.phone || '—',
+        avatar: p.avatar_url || prev.avatar,
+        preferred_language: p.preferred_language || prev.preferred_language,
+        isVerified: false,
+        kycStatus: 'incomplete',
+        bankVerified: false,
+        propertyVerified: false,
+      }));
+
+      // ✅ also sync UI language with profile setting
+      if (p.preferred_language && i18n.language !== p.preferred_language) {
+        await i18n.changeLanguage(p.preferred_language);
       }
-    })();
-  }, []);
+    } catch (e) {
+      // silent
+    }
+  }, [i18n]);
+
+  useEffect(() => {
+    loadProfile();
+  }, [loadProfile]);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      loadProfile();
+    }, [loadProfile])
+  );
+
 
   const handleSignOut = () => {
-    Alert.alert('Sign out?', 'Are you sure you want to sign out?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Sign out',
-        style: 'destructive',
-        onPress: () => {
-          Alert.alert('Signed Out', 'You have been signed out.');
-          // Add actual sign-out logic here (e.g., clear tokens, navigate to auth)
-          // For now, just navigate home or to login screen
-          router.replace('/'); // Example: Navigate to root (might be login)
+    Alert.alert(
+      t('profile.sign_out_title'),
+      t('profile.sign_out_desc'),
+      [
+        { text: t('common.cancel'), style: 'cancel' },
+        {
+          text: t('profile.sign_out'),
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              // ✅ Clear auth/session-related keys
+              await Promise.all([
+                SecureStore.deleteItemAsync('idToken'),          // stored during auth :contentReference[oaicite:1]{index=1}
+                SecureStore.deleteItemAsync('username'),         // stored during auth :contentReference[oaicite:2]{index=2}
+                SecureStore.deleteItemAsync('user_id'),          // used by websocket init
+                SecureStore.deleteItemAsync('pendingEmail'),
+                SecureStore.deleteItemAsync('pendingUsername'),
+                SecureStore.deleteItemAsync('pendingPassword'),
+              ]);
+
+              // Optional: if you want auth language to reset each time user signs out
+              // await SecureStore.deleteItemAsync('auth_language');
+
+              // ✅ Go to auth flow (pick one)
+              router.replace('/(auth)/LanguageSelection'); // recommended (your auth entry) :contentReference[oaicite:3]{index=3}
+              // router.replace('/(auth)/LoginPage');      // alternative
+            } catch (e) {
+              // Even if SecureStore fails, still force navigation out
+              router.replace('/(auth)/LanguageSelection');
+            }
+          },
         },
-      },
-    ]);
+      ]
+    );
   };
+
 
   // --- UPDATED handleRoleSwitch ---
   const handleRoleSwitch = () => {
@@ -119,7 +154,7 @@ export default function ProfileScreen() {
   return (
     <SafeAreaView style={styles.container}>
       {/* Use Stack.Screen to configure the header */}
-      <Stack.Screen options={{ title: 'Profile', headerLargeTitle: true }} />
+      <Stack.Screen options={{ title: t('profile.title'), headerLargeTitle: true }} />
 
       <ScrollView>
         <View style={styles.contentContainer}>
@@ -141,7 +176,7 @@ export default function ProfileScreen() {
                 <Text style={styles.profileEmail}>{userData.email}</Text>
                 <Link href="/settings/edit-profile" asChild>
                   <TouchableOpacity style={styles.editProfileButton}>
-                    <Text style={styles.editProfileButtonText}>Edit profile</Text>
+                    <Text style={styles.editProfileButtonText}>{t('profile.edit_profile')}</Text>
                   </TouchableOpacity>
                 </Link>
               </View>
@@ -170,13 +205,13 @@ export default function ProfileScreen() {
                   <Home size={20} color="#111827" />
                 </View>
                 <View>
-                  <Text style={styles.roleTitle}>Role & Hosting</Text>
+                  <Text style={styles.roleTitle}>{t('profile.role & hosting')}</Text>
                   <Text style={styles.roleSubtitle}>Current mode: <Text style={styles.capitalize}>{userRole}</Text></Text>
                 </View>
               </View>
               {/* This button now navigates */}
               <TouchableOpacity style={styles.switchRoleButton} onPress={handleRoleSwitch}>
-                <Text style={styles.switchRoleButtonText}>Switch to Host</Text>
+                <Text style={styles.switchRoleButtonText}>{t('profile.switch_to_host')}</Text>
               </TouchableOpacity>
             </View>
 
@@ -188,7 +223,7 @@ export default function ProfileScreen() {
                   {/* ... host status rows ... */}
                   <Link href="/settings/host-onboarding" asChild>
                     <TouchableOpacity style={styles.completeSetupButton}>
-                      <Text style={styles.completeSetupButtonText}>Complete host setup</Text>
+                      <Text style={styles.completeSetupButtonText}>{t('profile.complete_host_setup')}</Text>
                     </TouchableOpacity>
                   </Link>
                 </View>
@@ -198,54 +233,53 @@ export default function ProfileScreen() {
 
           {/* Account Settings */}
           <View style={styles.settingsGroup}>
-            <Text style={styles.settingsGroupTitle}>Account</Text>
+            <Text style={styles.settingsGroupTitle}>{t('profile.account')}</Text>
             <SettingsItem
               icon={<Lock size={20} color="#4B5563" />}
-              title="Login & Security"
-              description="Password, 2FA, connected devices"
+              title={t('settings.login_security.title')} // ✅ was: "Login & Security"
+              description={t('profile.security_desc')}     // ✅ was: "Password, 2FA, connected devices"
               href="/settings/login-security"
             />
             <SettingsItem
               icon={<Globe size={20} color="#4B5563" />}
-              title="Language & Region"
-              description="English (IN) • ₹ INR • DD/MM/YYYY"
+              title={t('settings.language_region.title')} // ✅ was: "Language & Region"
+              description={`${userData.preferred_language.toUpperCase()} • ₹ INR • DD/MM/YYYY`} // Keep dynamic part
               href="/settings/language-region"
             />
              <SettingsItem
-              // Icon and titles dynamically change based on local userRole state
               icon={userRole === 'guest' ? <CreditCard size={20} color="#4B5563" /> : <Landmark size={20} color="#4B5563" />}
-              title={userRole === 'guest' ? 'Payments' : 'Payouts'}
-              description={userRole === 'guest' ? 'Methods, receipts' : 'Bank account, statements'}
-              href="/settings/payments" // The payments page should handle role internally or receive it via params if needed
+              title={userRole === 'guest' ? t('profile.payments') : t('profile.payouts')} // ✅ was: 'Payments' : 'Payouts'
+              description={userRole === 'guest' ? t('profile.payments_desc') : t('profile.payouts_desc')} // ✅ was: 'Methods, receipts' : 'Bank account, statements'
+              href="/settings/payments"
             />
             <SettingsItem
               icon={<Bell size={20} color="#4B5563" />}
-              title="Notifications"
-              description="Push, SMS, WhatsApp preferences"
+              title={t('settings.notifications.title')} // ✅ was: "Notifications"
+              description={t('profile.notifications_desc')} // ✅ was: "Push, SMS, WhatsApp preferences"
               href="/settings/notifications"
             />
             <SettingsItem
               icon={<Shield size={20} color="#4B5563" />}
-              title="Privacy & Safety"
-              description="Identity verification, data controls"
+              title={t('settings.privacy_safety.title')} // ✅ was: "Privacy & Safety"
+              description={t('profile.privacy_safety_desc')} // ✅ was: "Identity verification, data controls"
               href="/settings/privacy-safety"
             />
           </View>
 
           {/* Support */}
           <View style={styles.settingsGroup}>
-            <Text style={styles.settingsGroupTitle}>Support</Text>
+            <Text style={styles.settingsGroupTitle}>{t('profile.support')}</Text>
             <SettingsItem
               icon={<HelpCircle size={20} color="#4B5563" />}
-              title="Help Center"
-              description="FAQs, contact support, report issue"
+              title={t('profile.help_center')} // ✅ was: "Help Center"
+              description={t('profile.help_center_desc')} // ✅ was: "FAQs, contact support, report issue"
               href="/settings/help-center"
             />
             <SettingsItem
               icon={<FileText size={20} color="#4B5563" />}
-              title="Legal"
-              description="Terms, privacy policy, licenses"
-              href="/settings/help-center" // Link to Help Center for now, or create separate legal page
+              title={t('profile.legal')} // ✅ was: "Legal"
+              description={t('profile.legal_desc')} // ✅ was: "Terms, privacy policy, licenses"
+              href="/settings/help-center"
             />
           </View>
 
@@ -253,7 +287,7 @@ export default function ProfileScreen() {
           <View style={styles.signOutCard}>
             <TouchableOpacity style={styles.signOutButton} onPress={handleSignOut}>
               <LogOut size={18} color="white" />
-              <Text style={styles.signOutButtonText}>Sign out</Text>
+              <Text style={styles.signOutButtonText}>{t('profile.sign_out')}</Text>
             </TouchableOpacity>
             <Text style={styles.versionText}>Version 1.0.0 • Build 2025.10</Text>
           </View>
@@ -272,23 +306,41 @@ const styles = StyleSheet.create({
   avatarContainer: { position: 'relative' },
   avatarImage: { width: 80, height: 80, borderRadius: 40 },
   cameraButton: {
-    position: 'absolute', bottom: 0, right: 0, width: 28, height: 28,
-    backgroundColor: '#111827', borderRadius: 14, justifyContent: 'center',
-    alignItems: 'center', borderWidth: 2, borderColor: 'white',
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 28,
+    height: 28,
+    backgroundColor: '#111827',
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: 'white',
   },
   profileInfo: { flex: 1 },
   profileNameRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
   profileName: { fontSize: 20, fontWeight: 'bold' },
   profileEmail: { fontSize: 14, color: '#6B7280', marginBottom: 12 },
   editProfileButton: {
-    borderColor: '#D1D5DB', borderWidth: 1, borderRadius: 8,
-    paddingHorizontal: 12, paddingVertical: 6, alignSelf: 'flex-start',
+    borderColor: '#D1D5DB',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    alignSelf: 'flex-start',
   },
   editProfileButtonText: { fontSize: 14, fontWeight: '500', color: '#111827' },
   verificationBanner: {
-    marginTop: 16, backgroundColor: '#FEF3C7', borderColor: '#FDE68A',
-    borderWidth: 1, borderRadius: 8, padding: 12, flexDirection: 'row',
-    alignItems: 'flex-start', gap: 8,
+    marginTop: 16,
+    backgroundColor: '#FEF3C7',
+    borderColor: '#FDE68A',
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
   },
   verificationIcon: { marginTop: 2 },
   verificationTextContainer: { flex: 1 },
@@ -297,17 +349,53 @@ const styles = StyleSheet.create({
   roleHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
   roleInfo: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   roleIconBg: {
-    width: 40, height: 40, backgroundColor: '#F3F4F6', borderRadius: 20,
-    justifyContent: 'center', alignItems: 'center',
+    width: 40,
+    height: 40,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   roleTitle: { fontSize: 16, fontWeight: 'bold' },
   roleSubtitle: { fontSize: 14, color: '#6B7280' },
   capitalize: { textTransform: 'capitalize' },
   switchRoleButton: {
-    borderColor: '#D1D5DB', borderWidth: 1, borderRadius: 8,
-    paddingHorizontal: 12, paddingVertical: 6,
+    borderColor: '#D1D5DB',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
   },
   switchRoleButtonText: { fontSize: 14, fontWeight: '500', color: '#111827' },
+  settingsGroup: { gap: 8 },
+  settingsGroupTitle: { fontSize: 14, fontWeight: '500', color: '#6B7280', paddingHorizontal: 8, marginBottom: 4 },
+  settingsItemCard: { backgroundColor: 'white', borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB' },
+  settingsItemContent: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 16 },
+  settingsItemIconBg: {
+    width: 40,
+    height: 40,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexShrink: 0,
+  },
+  settingsItemTextContainer: { flex: 1 },
+  settingsItemTitle: { fontSize: 16, fontWeight: '500', marginBottom: 2 },
+  settingsItemDescription: { fontSize: 14, color: '#6B7280' },
+  settingsItemChevron: { flexShrink: 0 },
+  signOutCard: { backgroundColor: 'white', borderRadius: 12, padding: 16, borderWidth: 1, borderColor: '#E5E7EB' },
+  signOutButton: {
+    backgroundColor: '#DC2626',
+    borderRadius: 8,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+  },
+  signOutButtonText: { fontSize: 16, fontWeight: 'bold', color: 'white' },
+  versionText: { fontSize: 12, color: '#6B7280', textAlign: 'center', marginTop: 12 },
   divider: { height: 1, backgroundColor: '#E5E7EB', marginVertical: 12 },
   hostStatusContainer: { gap: 8 },
   hostStatusRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
@@ -321,23 +409,4 @@ const styles = StyleSheet.create({
     paddingVertical: 8, alignItems: 'center', marginTop: 8,
   },
   completeSetupButtonText: { fontSize: 14, fontWeight: '500', color: '#111827' },
-  settingsGroup: { gap: 8 },
-  settingsGroupTitle: { fontSize: 14, fontWeight: '500', color: '#6B7280', paddingHorizontal: 8, marginBottom: 4 },
-  settingsItemCard: { backgroundColor: 'white', borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB' },
-  settingsItemContent: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 16 },
-  settingsItemIconBg: {
-    width: 40, height: 40, backgroundColor: '#F3F4F6', borderRadius: 20,
-    justifyContent: 'center', alignItems: 'center', flexShrink: 0,
-  },
-  settingsItemTextContainer: { flex: 1 },
-  settingsItemTitle: { fontSize: 16, fontWeight: '500', marginBottom: 2 },
-  settingsItemDescription: { fontSize: 14, color: '#6B7280' },
-  settingsItemChevron: { flexShrink: 0 },
-  signOutCard: { backgroundColor: 'white', borderRadius: 12, padding: 16, borderWidth: 1, borderColor: '#E5E7EB' },
-  signOutButton: {
-    backgroundColor: '#DC2626', borderRadius: 8, paddingVertical: 12,
-    flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 8,
-  },
-  signOutButtonText: { fontSize: 16, fontWeight: 'bold', color: 'white' },
-  versionText: { fontSize: 12, color: '#6B7280', textAlign: 'center', marginTop: 12 },
 });

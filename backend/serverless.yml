@@ -1,25 +1,37 @@
 service: india-rental-api
 frameworkVersion: "3"
-useDotenv: true 
+useDotenv: true
 
 plugins:
   - serverless-python-requirements
-  #- serverless-dotenv-plugin
+  - serverless-dotenv-plugin
+  - serverless-prune-plugin
 
 custom:
   pythonRequirements:
     layer: true
     slim: false
     zip: true
-    #dockerizePip: true
     useStaticCache: false
+
   photosBucketName: india-rental-api-${sls:stage}-photos-${aws:accountId}
+
+  # ✅ VPC ID for DynamoDB endpoint - replace with your actual VPC ID
+  vpcId: vpc-xxxxxxx
+
+  prune:
+    automatic: true
+    number: 3
+
+  defaultLayers:
+    - { Ref: PythonRequirementsLambdaLayer }
+    - { Ref: CommonLambdaLayer }
 
 package:
   patterns:
-    - '!scripts/**'
-    - '!**/*.md'
-    - '!**/.env*'
+    - alembic.ini
+    - migrations/**
+    - alembic/**
 
 provider:
   name: aws
@@ -28,26 +40,37 @@ provider:
   stage: dev
   memorySize: 512
   timeout: 10
+
+  layers: ${self:custom.defaultLayers}
+
+  # ✅ VPC config - replace with your actual IDs
+  vpc:
+    securityGroupIds:
+      - sg-xxxxxxx
+    subnetIds:
+      - subnet-xxxxxx
+      - subnet-xxxxxxx
+
   environment:
     DATABASE_URL: ${env:DATABASE_URL}
     DEBUG_ERRORS: "true"
+
     PHOTOS_BUCKET: ${self:custom.photosBucketName}
-  vpc: 
-    securityGroupIds:
-      - sg-0123456789abcdef0
-    subnetIds:
-      - subnet-aaaaaa
-      - subnet-bbbbbb
-  iamRoleStatements:
-    - Effect: Allow
-      Action:
-        - s3:PutObject
-        - s3:PutObjectAcl
-        - s3:GetObject
-        - s3:ListBucket
-      Resource:
-        - arn:aws:s3:::${self:provider.environment.PHOTOS_BUCKET}
-        - arn:aws:s3:::${self:provider.environment.PHOTOS_BUCKET}/*
+    AVAILABILITY_TABLE: ${self:service}-${sls:stage}-availability
+
+    CHAT_CONVERSATIONS_TABLE: ${self:service}-${sls:stage}-chat-conversations
+    CHAT_MESSAGES_TABLE: ${self:service}-${sls:stage}-chat-messages
+    CHAT_CONNECTIONS_TABLE: ${self:service}-${sls:stage}-chat-connections
+
+    # ✅ FIX: Use proper CloudFormation reference for WebSocket API ID
+    WS_API_ID:
+      Ref: WebsocketsApi
+    WS_STAGE: ${sls:stage}
+
+  websocketApi:
+    name: ${self:service}-${sls:stage}-ws
+    routeSelectionExpression: $request.body.action
+
   httpApi:
     payload: "2.0"
     cors: true
@@ -59,6 +82,51 @@ provider:
         audience:
           - ${env:COGNITO_APP_CLIENT_ID}
 
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - s3:PutObject
+            - s3:GetObject
+            - s3:ListBucket
+          Resource:
+            - arn:aws:s3:::${self:provider.environment.PHOTOS_BUCKET}
+            - arn:aws:s3:::${self:provider.environment.PHOTOS_BUCKET}/*
+
+        - Effect: Allow
+          Action:
+            - dynamodb:PutItem
+            - dynamodb:GetItem
+            - dynamodb:Query
+            - dynamodb:UpdateItem
+            - dynamodb:DeleteItem
+          Resource:
+            - arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.AVAILABILITY_TABLE}
+            - arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.CHAT_CONVERSATIONS_TABLE}
+            - arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.CHAT_CONVERSATIONS_TABLE}/index/*
+            - arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.CHAT_MESSAGES_TABLE}
+            - arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.CHAT_MESSAGES_TABLE}/index/*
+            - arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.CHAT_CONNECTIONS_TABLE}
+            - arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.CHAT_CONNECTIONS_TABLE}/index/*
+
+        - Effect: Allow
+          Action:
+            - execute-api:ManageConnections
+          Resource:
+            - arn:aws:execute-api:${self:provider.region}:*:*/@connections/*
+
+        # ✅ THIS is the one you need for AWS Translate
+        - Effect: Allow
+          Action:
+            - translate:TranslateText
+          Resource: "*"
+
+        - Effect: Allow
+          Action:
+            - comprehend:DetectDominantLanguage
+          Resource: "*"
+
 layers:
   common:
     path: layers/common
@@ -66,111 +134,409 @@ layers:
     compatibleRuntimes: [python3.11]
 
 functions:
-  health:
-    handler: functions/health/handler.health
-    layers:
-      - ${cf:${self:service}-${sls:stage}.PythonRequirementsLambdaLayerQualifiedArn}
-      - ${cf:${self:service}-${sls:stage}.CommonLambdaLayerQualifiedArn}
+  # ---------------- health + me ----------------
+  migrate:
+    handler: functions/admin/migrate.handler
+    timeout: 30
     events:
       - httpApi:
-          path: /v1/health
-          method: GET
-      - httpApi:
-          path: /v1/health/db
-          method: GET
+          path: /v1/admin/migrate
+          method: POST
+    environment:
+      MIGRATE_KEY: ${env:MIGRATE_KEY}
+      STAGE: ${sls:stage}
+
+  health:
+    handler: functions/health/handler.health
+    events:
+      - httpApi: { path: /v1/health, method: GET }
+
+  health_db:
+    handler: functions/health/handler.health_db
+    events:
+      - httpApi: { path: /v1/health/db, method: GET }
+
+  debug_translation:
+    handler: functions/health/handler.debug_translation
+    events:
+      - httpApi: { path: /v1/debug/translation, method: GET }
+
+  debug_env:
+    handler: functions/health/handler.debug_env
+    events:
+      - httpApi: { path: /v1/debug/env, method: GET }
+
+  debug_connection:
+    handler: functions/health/handler.debug_connection
+    events:
+      - httpApi: { path: /v1/debug/connection, method: GET }
 
   me:
     handler: functions/health/handler.me
-    layers:
-      - ${cf:${self:service}-${sls:stage}.PythonRequirementsLambdaLayerQualifiedArn}
-      - ${cf:${self:service}-${sls:stage}.CommonLambdaLayerQualifiedArn}
     events:
       - httpApi:
           path: /v1/me
           method: GET
-          authorizer:
-            name: CognitoJwt
+          authorizer: { name: CognitoJwt }
 
-
-  list_listings:
-    handler: functions/listings/handler.list_listings
-    layers:
-      - ${cf:${self:service}-${sls:stage}.PythonRequirementsLambdaLayerQualifiedArn}
-      - ${cf:${self:service}-${sls:stage}.CommonLambdaLayerQualifiedArn}
-    events:
-      - httpApi:
-          path: /v1/listings
-          method: GET
-
-  get_listing:
-    handler: functions/listings/handler.get_listing
-    layers:
-      - ${cf:${self:service}-${sls:stage}.PythonRequirementsLambdaLayerQualifiedArn}
-      - ${cf:${self:service}-${sls:stage}.CommonLambdaLayerQualifiedArn}
-    events:
-      - httpApi:
-          path: /v1/listings/{listing_id}
-          method: GET
-
-  search:
-    handler: functions/search/handler.search
-    layers:
-      - ${cf:${self:service}-${sls:stage}.PythonRequirementsLambdaLayerQualifiedArn}
-      - ${cf:${self:service}-${sls:stage}.CommonLambdaLayerQualifiedArn}
-    events:
-      - httpApi:
-          path: /v1/search
-          method: GET
-  
-  health_listings:
-    handler: functions/listings/handler.health_listings
-    layers:
-      - ${cf:${self:service}-${sls:stage}.PythonRequirementsLambdaLayerQualifiedArn}
-      - ${cf:${self:service}-${sls:stage}.CommonLambdaLayerQualifiedArn}
-    events:
-    - httpApi:
-        path: /v1/health/listings
-        method: GET
-        
-  presign_upload:
-    handler: functions/uploads/handler.presign_upload
-    layers:
-      - ${cf:${self:service}-${sls:stage}.PythonRequirementsLambdaLayerQualifiedArn}
-      - ${cf:${self:service}-${sls:stage}.CommonLambdaLayerQualifiedArn}
-    events:
-      - httpApi:
-          path: /v1/uploads/presign
-          method: POST
-          authorizer:
-            name: CognitoJwt
-  
+  # ---------------- profile ----------------
   get_profile:
     handler: functions/profile/handler.get_profile
     events:
       - httpApi:
           path: /v1/profile
-          method: get
-          authorizer:
-            name: CognitoJwt
+          method: GET
+          authorizer: { name: CognitoJwt }
 
   upsert_profile:
     handler: functions/profile/handler.upsert_profile
     events:
       - httpApi:
           path: /v1/profile
-          method: put
-          authorizer:
-            name: CognitoJwt
-  
-  route_search:
-    handler: functions/route/handler.route_search
-    layers:
-      - ${cf:${self:service}-${sls:stage}.PythonRequirementsLambdaLayerQualifiedArn}
-      - ${cf:${self:service}-${sls:stage}.CommonLambdaLayerQualifiedArn}
+          method: PUT
+          authorizer: { name: CognitoJwt }
+
+  # ---------------- listings ----------------
+  list_listings:
+    handler: functions/listings/handler.list_listings
+    events:
+      - httpApi: { path: /v1/listings, method: GET }
+
+  get_listing:
+    handler: functions/listings/handler.get_listing
     events:
       - httpApi:
-          path: /v1/route-search
-          method: get
+          path: /v1/listings/{listing_id}
+          method: GET
+
+  create_listing:
+    handler: functions/listings/handler.create_listing
+    events:
+      - httpApi:
+          path: /v1/listings
+          method: POST
+          authorizer: { name: CognitoJwt }
+
+  update_listing:
+    handler: functions/listings/handler.update_listing
+    events:
+      - httpApi:
+          path: /v1/listings/{listing_id}
+          method: PUT
+          authorizer: { name: CognitoJwt }
+
+  delete_listing:
+    handler: functions/listings/handler.delete_listing
+    events:
+      - httpApi:
+          path: /v1/listings/{listing_id}
+          method: DELETE
+          authorizer: { name: CognitoJwt }
+
+  list_my_listings:
+    handler: functions/listings/handler.list_my_listings
+    events:
+      - httpApi:
+          path: /v1/my/listings
+          method: GET
+          authorizer: { name: CognitoJwt }
+
+  # ---------------- availability ----------------
+  get_availability:
+    handler: functions/availability/handler.get_availability
+    events:
+      - httpApi:
+          path: /v1/listings/{listing_id}/availability
+          method: GET
+
+  update_availability:
+    handler: functions/availability/handler.update_availability
+    events:
+      - httpApi:
+          path: /v1/listings/{listing_id}/availability
+          method: PUT
+          authorizer: { name: CognitoJwt }
+
+  # ---------------- bookings ----------------
+  create_booking:
+    handler: functions/bookings/handler.create_booking
+    events:
+      - httpApi:
+          path: /v1/bookings
+          method: POST
+          authorizer: { name: CognitoJwt }
+
+  list_my_bookings:
+    handler: functions/bookings/handler.list_my_bookings
+    events:
+      - httpApi:
+          path: /v1/bookings
+          method: GET
+          authorizer: { name: CognitoJwt }
+
+  cancel_booking:
+    handler: functions/bookings/handler.cancel_booking
+    events:
+      - httpApi:
+          path: /v1/bookings/{booking_id}
+          method: DELETE
+          authorizer: { name: CognitoJwt }
+
+  list_host_bookings:
+    handler: functions/bookings/handler.list_host_bookings
+    events:
+      - httpApi:
+          path: /v1/host/bookings
+          method: GET
+          authorizer: { name: CognitoJwt }
+
+  update_host_booking:
+    handler: functions/bookings/handler.update_host_booking
+    events:
+      - httpApi:
+          path: /v1/host/bookings/{booking_id}
+          method: PUT
+          authorizer: { name: CognitoJwt }
+
+  review_booking:
+    handler: functions/bookings/handler.create_or_update_review
+    events:
+      - httpApi:
+          path: /v1/bookings/{booking_id}/review
+          method: POST
+          authorizer: { name: CognitoJwt }
+
+  # ---------------- route + search ----------------
+  search:
+    handler: functions/search/handler.search
+    events:
+      - httpApi: { path: /v1/search, method: GET }
+
+  route_search:
+    handler: functions/route/handler.route_search
+    events:
+      - httpApi: { path: /v1/route-search, method: GET }
+
+  # ---------------- uploads ----------------
+  presign_upload:
+    handler: functions/uploads/handler.presign_upload
+    events:
+      - httpApi:
+          path: /v1/uploads/presign
+          method: POST
+          authorizer: { name: CognitoJwt }
+
+  # ---------------- wishlists ----------------
+  list_wishlists:
+    handler: functions/wishlists/handler.list_wishlists
+    events:
+      - httpApi:
+          path: /v1/wishlists
+          method: GET
+          authorizer: { name: CognitoJwt }
+
+  get_wishlist:
+    handler: functions/wishlists/handler.get_wishlist
+    events:
+      - httpApi:
+          path: /v1/wishlists/{wishlist_id}
+          method: GET
+          authorizer: { name: CognitoJwt }
+
+  create_wishlist:
+    handler: functions/wishlists/handler.create_wishlist
+    events:
+      - httpApi:
+          path: /v1/wishlists
+          method: POST
+          authorizer: { name: CognitoJwt }
+
+  update_wishlist:
+    handler: functions/wishlists/handler.update_wishlist
+    events:
+      - httpApi:
+          path: /v1/wishlists/{wishlist_id}
+          method: PUT
+          authorizer: { name: CognitoJwt }
+
+  delete_wishlist:
+    handler: functions/wishlists/handler.delete_wishlist
+    events:
+      - httpApi:
+          path: /v1/wishlists/{wishlist_id}
+          method: DELETE
+          authorizer: { name: CognitoJwt }
+
+  add_wishlist_item:
+    handler: functions/wishlists/handler.add_item
+    events:
+      - httpApi:
+          path: /v1/wishlists/{wishlist_id}/items
+          method: POST
+          authorizer: { name: CognitoJwt }
+
+  remove_wishlist_item:
+    handler: functions/wishlists/handler.remove_item
+    events:
+      - httpApi:
+          path: /v1/wishlists/{wishlist_id}/items/{listing_id}
+          method: DELETE
+          authorizer: { name: CognitoJwt }
+
+  # ---------------- trip lists ----------------
+  list_trip_lists:
+    handler: functions/trips/handler.list_trip_lists
+    events:
+      - httpApi:
+          path: /v1/trip-lists
+          method: GET
+          authorizer: { name: CognitoJwt }
+
+  get_trip_list:
+    handler: functions/trips/handler.get_trip_list
+    events:
+      - httpApi:
+          path: /v1/trip-lists/{trip_list_id}
+          method: GET
+          authorizer: { name: CognitoJwt }
+
+  create_trip_list:
+    handler: functions/trips/handler.create_trip_list
+    events:
+      - httpApi:
+          path: /v1/trip-lists
+          method: POST
+          authorizer: { name: CognitoJwt }
+
+  update_trip_list:
+    handler: functions/trips/handler.update_trip_list
+    events:
+      - httpApi:
+          path: /v1/trip-lists/{trip_list_id}
+          method: PUT
+          authorizer: { name: CognitoJwt }
+
+  delete_trip_list:
+    handler: functions/trips/handler.delete_trip_list
+    events:
+      - httpApi:
+          path: /v1/trip-lists/{trip_list_id}
+          method: DELETE
+          authorizer: { name: CognitoJwt }
+
+  add_trip_list_item:
+    handler: functions/trips/handler.add_item
+    events:
+      - httpApi:
+          path: /v1/trip-lists/{trip_list_id}/items
+          method: POST
+          authorizer: { name: CognitoJwt }
+
+  remove_trip_list_item:
+    handler: functions/trips/handler.remove_item
+    events:
+      - httpApi:
+          path: /v1/trip-lists/{trip_list_id}/items/{listing_id}
+          method: DELETE
+          authorizer: { name: CognitoJwt }
+
+  # ---------------- reviews ----------------
+  reviews:
+    handler: functions/reviews/handler.create_review
+    events:
+      - httpApi:
+          path: /v1/reviews
+          method: POST
+          authorizer: { name: CognitoJwt }
+
+  reviewsMine:
+    handler: functions/reviews/handler.my_reviews
+    events:
+      - httpApi:
+          path: /v1/reviews/mine
+          method: GET
+          authorizer: { name: CognitoJwt }
+
+  listingReviews:
+    handler: functions/reviews/handler.list_listing_reviews
+    events:
+      - httpApi:
+          path: /v1/listings/{listing_id}/reviews
+          method: GET
+
+  hostReviews:
+    handler: functions/reviews/handler.host_reviews
+    events:
+      - httpApi:
+          path: /v1/host/reviews
+          method: GET
+          authorizer: { name: CognitoJwt }
+
+  # ---------------- chats (HTTP) ----------------
+  list_my_chats:
+    handler: functions/chats/handler.list_my_chats
+    events:
+      - httpApi:
+          path: /v1/chats
+          method: GET
+          authorizer: { name: CognitoJwt }
+
+  list_chat_messages:
+    handler: functions/chats/handler.list_chat_messages
+    events:
+      - httpApi:
+          path: /v1/chats/{booking_id}/messages
+          method: GET
+          authorizer: { name: CognitoJwt }
+
+  send_chat_message:
+    handler: functions/chats/handler.send_chat_message
+    events:
+      - httpApi:
+          path: /v1/chats/{booking_id}/messages
+          method: POST
+          authorizer: { name: CognitoJwt }
+
+  open_chat:
+    handler: functions/chats/handler.open_chat
+    events:
+      - httpApi:
+          path: /v1/chats/{booking_id}/open
+          method: POST
+          authorizer: { name: CognitoJwt }
+
+  delete_chat:
+    handler: functions/chats/handler.delete_chat
+    events:
+      - httpApi:
+          path: /v1/chats/{booking_id}
+          method: DELETE
+          authorizer: { name: CognitoJwt }
+
+  # ---------------- websockets ----------------
+  ws_connect:
+    handler: functions/ws/handler.connect
+    events:
+      - websocket:
+          route: $connect
+
+  ws_disconnect:
+    handler: functions/ws/handler.disconnect
+    events:
+      - websocket:
+          route: $disconnect
+
+  ws_default:
+    handler: functions/ws/handler.default
+    events:
+      - websocket:
+          route: $default
+
+  ws_ping:
+    handler: functions/ws/handler.ping
+    events:
+      - websocket:
+          route: ping
 
 resources:
   Resources:
@@ -185,9 +551,9 @@ resources:
           RestrictPublicBuckets: false
         CorsConfiguration:
           CorsRules:
-            - AllowedOrigins: ['*']
-              AllowedMethods: [GET, PUT, HEAD]
-              AllowedHeaders: ['*']
+            - AllowedOrigins: ["*"]
+              AllowedMethods: [GET, PUT, POST, HEAD]
+              AllowedHeaders: ["*"]
               MaxAge: 300
 
     PhotosBucketPolicy:
@@ -201,4 +567,118 @@ resources:
               Effect: Allow
               Principal: "*"
               Action: s3:GetObject
-              Resource: arn:aws:s3:::${self:custom.photosBucketName}/photos/*
+              Resource:
+                - arn:aws:s3:::${self:custom.photosBucketName}/photos/*
+                - arn:aws:s3:::${self:custom.photosBucketName}/avatars/*
+
+    AvailabilityTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.AVAILABILITY_TABLE}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: listing_id
+            AttributeType: S
+          - AttributeName: date
+            AttributeType: S
+        KeySchema:
+          - AttributeName: listing_id
+            KeyType: HASH
+          - AttributeName: date
+            KeyType: RANGE
+
+    ChatConversationsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.CHAT_CONVERSATIONS_TABLE}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: booking_id
+            AttributeType: S
+          - AttributeName: updated_at
+            AttributeType: S
+          - AttributeName: host_user_id
+            AttributeType: S
+          - AttributeName: guest_user_id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: booking_id
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: host-updated-index
+            KeySchema:
+              - AttributeName: host_user_id
+                KeyType: HASH
+              - AttributeName: updated_at
+                KeyType: RANGE
+            Projection: { ProjectionType: ALL }
+          - IndexName: guest-updated-index
+            KeySchema:
+              - AttributeName: guest_user_id
+                KeyType: HASH
+              - AttributeName: updated_at
+                KeyType: RANGE
+            Projection: { ProjectionType: ALL }
+
+    ChatMessagesTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.CHAT_MESSAGES_TABLE}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: booking_id
+            AttributeType: S
+          - AttributeName: created_at
+            AttributeType: S
+        KeySchema:
+          - AttributeName: booking_id
+            KeyType: HASH
+          - AttributeName: created_at
+            KeyType: RANGE
+
+    ChatConnectionsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.CHAT_CONNECTIONS_TABLE}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: user_id
+            AttributeType: S
+          - AttributeName: connection_id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: user_id
+            KeyType: HASH
+          - AttributeName: connection_id
+            KeyType: RANGE
+        TimeToLiveSpecification:
+          AttributeName: ttl
+          Enabled: true
+        GlobalSecondaryIndexes:
+          - IndexName: connection-index
+            KeySchema:
+              - AttributeName: connection_id
+                KeyType: HASH
+            Projection:
+              ProjectionType: ALL
+
+    # ✅ CRITICAL: VPC Endpoint for DynamoDB (required for Lambda in VPC)
+    DynamoDBVPCEndpoint:
+      Type: AWS::EC2::VPCEndpoint
+      Properties:
+        VpcId: ${self:custom.vpcId}
+        ServiceName: com.amazonaws.${self:provider.region}.dynamodb
+        VpcEndpointType: Gateway
+        RouteTableIds:
+          - rtb-xxxxxxxxx
+
+  Outputs:
+    WebSocketApiUrl:
+      Value:
+        Fn::Sub: "wss://${WebsocketsApi}.execute-api.${AWS::Region}.amazonaws.com/${sls:stage}"
+      Description: WebSocket API URL
+
+    WebSocketApiId:
+      Value:
+        Ref: WebsocketsApi
+      Description: WebSocket API ID

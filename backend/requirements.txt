@@ -2,3 +2,7 @@ SQLAlchemy==2.0.35
 pg8000==1.30.5
 scramp==1.4.5
 certifi==2024.8.30
+boto3==1.34.87
+#psycopg2-binary==2.9.9
+alembic==1.13.2
+

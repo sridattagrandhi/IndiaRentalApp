@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 // app/(auth)/SignupPage.tsx
 import AuthContainer from '@/components/ui/authContainer';
 import AuthHeader from '@/components/ui/authHeader';
@@ -15,6 +16,7 @@ import { Alert, ScrollView, Text, View } from 'react-native';
 import { signUpEmail } from '@/services/auth';
 
 export default function SignupPage() {
+  const { t } = useTranslation();
   const [email, setEmail] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -23,13 +25,13 @@ export default function SignupPage() {
   const handleSignup = async () => {
     // 1. Check if any fields are empty
     if (!email || !username || !password || !confirmPassword) {
-      Alert.alert('Missing Fields', 'Please fill in all fields.');
+      Alert.alert(t('auth.signup.alerts.missing_fields_title'), t('auth.signup.alerts.missing_fields_message'));
       return;
     }
 
     // 2. Check if passwords match
     if (password !== confirmPassword) {
-      Alert.alert('Password Mismatch', 'Passwords do not match. Please try again.');
+      Alert.alert(t('auth.signup.alerts.password_mismatch_title'), t('auth.signup.alerts.password_mismatch_message'));
       return;
     }
     
@@ -43,7 +45,7 @@ export default function SignupPage() {
 
     if (errors.length > 0) {
       const errorMessage = "Password must:\n\n" + errors.map(err => `• ${err}`).join('\n');
-      Alert.alert('Password Not Strong Enough', errorMessage);
+      Alert.alert(t('auth.signup.alerts.password_not_strong_title'), errorMessage);
       return;
     }
 
@@ -61,12 +63,12 @@ export default function SignupPage() {
         params: { type: 'email', value: email, username },
       });
     } catch (err: any) {
-      Alert.alert('Sign up failed', err?.message ?? 'Please try again.');
+      Alert.alert(t('auth.signup.alerts.signup_failed_title'), err?.message ?? 'Please try again.');
     }
   };
 
   const handleSocialSignup = (provider: string) => {
-    Alert.alert('Social Signup', `Continue with ${provider}`);
+    Alert.alert(t('auth.signup.social_signup'), `Continue with ${provider}`);
     // Hosted UI will be wired later
   };
 
@@ -76,14 +78,14 @@ export default function SignupPage() {
         <AuthHeader
           icon={<FontAwesome name="user-plus" size={30} color="white" />}
           title="Create Account"
-          subtitle="Sign up to get started"
+          subtitle={t('auth.signup.subtitle')}
         />
 
-        <SocialButton title="Continue with Google"   icon="logo-google"   onPress={() => handleSocialSignup('Google')} />
-        <SocialButton title="Continue with Apple"    icon="logo-apple"    onPress={() => handleSocialSignup('Apple')} />
-        <SocialButton title="Continue with Facebook" icon="logo-facebook" onPress={() => handleSocialSignup('Facebook')} />
-        <SocialButton title="Continue with Instagram" icon="logo-instagram" onPress={() => handleSocialSignup('Instagram')} />
-        <SocialButton title="Continue with WhatsApp" icon="logo-whatsapp" onPress={() => handleSocialSignup('WhatsApp')} />
+        <SocialButton title={t('auth.login.continue_with_google')}   icon="logo-google"   onPress={() => handleSocialSignup('Google')} />
+        <SocialButton title={t('auth.login.continue_with_apple')}    icon="logo-apple"    onPress={() => handleSocialSignup('Apple')} />
+        <SocialButton title={t('auth.login.continue_with_facebook')} icon="logo-facebook" onPress={() => handleSocialSignup('Facebook')} />
+        <SocialButton title={t('auth.login.continue_with_instagram')} icon="logo-instagram" onPress={() => handleSocialSignup('Instagram')} />
+        <SocialButton title={t('auth.login.continue_with_whatsapp')} icon="logo-whatsapp" onPress={() => handleSocialSignup('WhatsApp')} />
 
         <View style={styles.dividerContainer}>
           <View style={styles.dividerLine} />
@@ -92,42 +94,42 @@ export default function SignupPage() {
         </View>
 
         <LabeledInput
-          label="Email Address"
-          placeholder="Enter your email"
+          label={t('auth.signup.email_label')}
+          placeholder={t('auth.signup.email_placeholder')}
           value={email}
           onChangeText={setEmail}
           keyboardType="email-address"
           autoCapitalize="none"
         />
         <LabeledInput
-          label="Username"
-          placeholder="Choose a username"
+          label={t('auth.signup.username_label')}
+          placeholder={t('auth.signup.username_placeholder')}
           value={username}
           onChangeText={setUsername}
           autoCapitalize="none"
         />
         
         <LabeledInput
-          label="Password"
-          placeholder="8+ chars, 1 uppercase, 1 number, 1 special"
+          label={t('settings.login_security.password')}
+          placeholder={t('auth.signup.password_requirements')}
           value={password}
           onChangeText={setPassword}
           isPassword
         />
         <LabeledInput
-          label="Confirm Password"
-          placeholder="Confirm your password"
+          label={t('auth.signup.confirm_password_label')}
+          placeholder={t('auth.signup.confirm_password_placeholder')}
           value={confirmPassword}
           onChangeText={setConfirmPassword}
           isPassword
         />
 
-        <PrimaryButton title="Sign Up" onPress={handleSignup} />
+        <PrimaryButton title={t('auth.signup.sign_up')} onPress={handleSignup} />
         
         <View style={styles.loginLinkContainer}>
-          <Text style={styles.loginText}>Already have an account? </Text>
+          <Text style={styles.loginText}>{t('auth.signup.already_have_account')}</Text>
           <Link href="/(auth)/LoginPage">
-            <Text style={styles.loginLink}>Login here</Text>
+            <Text style={styles.loginLink}>{t('auth.signup.login_here')}</Text>
           </Link>
         </View>
       </ScrollView>

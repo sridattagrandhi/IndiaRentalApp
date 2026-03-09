@@ -1,4 +1,5 @@
 // app/services/auth.ts
+import { apiGet } from '@/services/api';
 import {
   AuthenticationDetails,
   CognitoUser,
@@ -6,6 +7,7 @@ import {
   CognitoUserPool,
   CognitoUserSession,
 } from 'amazon-cognito-identity-js';
+import * as SecureStore from 'expo-secure-store';
 
 // Read from EXPO_PUBLIC_* env (or swap to your constants file if you prefer)
 const USER_POOL_ID = process.env.EXPO_PUBLIC_COGNITO_USER_POOL_ID!;
@@ -30,6 +32,65 @@ function ensureSession(user: CognitoUser): Promise<CognitoUserSession> {
     user.getSession((err: Error | null, session: CognitoUserSession) => 
       (err ? reject(err) : resolve(session)));
   });
+}
+
+/** 
+ * Helper to decode base64url (React Native compatible)
+ */
+function base64UrlDecode(str: string): string {
+  // Convert base64url to base64
+  let base64 = str.replace(/-/g, '+').replace(/_/g, '/');
+  
+  // Add padding if needed
+  while (base64.length % 4 !== 0) {
+    base64 += '=';
+  }
+  
+  // Decode base64 to string (React Native compatible)
+  try {
+    return decodeURIComponent(
+      atob(base64)
+        .split('')
+        .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+        .join('')
+    );
+  } catch (error) {
+    throw new Error('Failed to decode base64url');
+  }
+}
+
+/** 
+ * Helper to decode JWT and extract user_id (sub claim)
+ * This ensures we're using the same user_id that the backend sees
+ */
+function extractUserIdFromToken(idToken: string): string | null {
+  try {
+    // JWT format: header.payload.signature
+    const parts = idToken.split('.');
+    if (parts.length !== 3) {
+      console.error('Invalid JWT format');
+      return null;
+    }
+    
+    // Decode the payload (base64url)
+    const payload = parts[1];
+    const decodedPayload = base64UrlDecode(payload);
+    const decoded = JSON.parse(decodedPayload);
+    
+    // Return 'sub' claim (Cognito user UUID)
+    const userId = decoded.sub || decoded['cognito:username'] || decoded.email || null;
+    
+    if (userId) {
+      console.log('✅ Extracted user_id from token:', userId);
+    } else {
+      console.warn('⚠️ No user_id found in token claims:', Object.keys(decoded));
+    }
+    
+    return userId;
+  } catch (error) {
+    console.error('Failed to decode JWT:', error);
+    return null;
+  }
 }
 
 /** ---------- Public API (names your screens already use) ---------- **/
@@ -62,12 +123,54 @@ export async function signIn(params: { username: string; password: string }) {
 
   return new Promise<{ idToken: string; accessToken: string; refreshToken: string }>((resolve, reject) => {
     user.authenticateUser(auth, {
-      onSuccess: (session) =>
+      onSuccess: async (session) => {
+        const idToken = session.getIdToken().getJwtToken();
+        const accessToken = session.getAccessToken().getJwtToken();
+        const refreshToken = session.getRefreshToken().getToken();
+
+        try {
+          const profile = await apiGet<{ user_id: string; avatar_url?: string | null }>(
+            '/v1/profile',
+            { headers: { Authorization: `Bearer ${idToken}` } }
+          );
+
+          if (profile?.user_id) {
+            await SecureStore.setItemAsync('backend_user_id', profile.user_id);
+            console.log('✅ Stored backend_user_id:', profile.user_id);
+          } else {
+            console.warn('⚠️ /v1/profile returned no user_id');
+          }
+
+          if (profile?.avatar_url) {
+            await SecureStore.setItemAsync('my_avatar_url', profile.avatar_url);
+          }
+        } catch (e) {
+          console.warn('⚠️ Failed to fetch /v1/profile after login:', e);
+        }
+        
+        // ✅ CRITICAL: Extract and store user_id from the idToken
+        const userId = extractUserIdFromToken(idToken);
+        
+        if (userId) {
+          try {
+            await SecureStore.setItemAsync('user_id', userId);
+            console.log('✅ Stored user_id:', userId);
+          } catch (error) {
+            console.error('⚠️ Failed to store user_id:', error);
+          }
+        } else {
+          console.warn('⚠️ Could not extract user_id from token');
+        }
+        await SecureStore.setItemAsync('idToken', idToken);
+        await SecureStore.setItemAsync('accessToken', accessToken);
+        await SecureStore.setItemAsync('refreshToken', refreshToken);
+        
         resolve({
-          idToken: session.getIdToken().getJwtToken(),
-          accessToken: session.getAccessToken().getJwtToken(),
-          refreshToken: session.getRefreshToken().getToken(),
-        }),
+          idToken,
+          accessToken,
+          refreshToken,
+        });
+      },
       onFailure: reject,
       newPasswordRequired: () => reject(new Error('NewPasswordRequired')),
     });
@@ -88,10 +191,36 @@ export async function signInEmail(params: { usernameOrEmail: string; password: s
   };
 }
 
-// UPDATE ATTRIBUTES (NO ACCESS TOKEN NEEDED) — uses SRP session
+// SIGN OUT
+export async function signOut() {
+  const user = pool.getCurrentUser();
+  if (user) {
+    user.signOut();
+  }
+  
+  // Clear stored user_id
+  try {
+    await SecureStore.deleteItemAsync('user_id');
+    console.log('✅ Cleared user_id from storage');
+  } catch (error) {
+    console.error('⚠️ Failed to clear user_id:', error);
+  }
+}
+
+// GET CURRENT USER ID
+export async function getCurrentUserId(): Promise<string | null> {
+  try {
+    return await SecureStore.getItemAsync('user_id');
+  } catch (error) {
+    console.error('Failed to get user_id:', error);
+    return null;
+  }
+}
+
+// UPDATE ATTRIBUTES (NO ACCESS TOKEN NEEDED) – uses SRP session
 export async function updateAttributes(username: string, attributes: Record<string, string>) {
   const user = getCognitoUser(username);
-  await ensureSession(user); // ensure we’re authenticated
+  await ensureSession(user); // ensure we're authenticated
 
   const attrs = Object.entries(attributes).map(
     ([Name, Value]) => new CognitoUserAttribute({ Name, Value })

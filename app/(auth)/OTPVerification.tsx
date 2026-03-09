@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 // app/(auth)/OTPVerification.tsx
 import AuthContainer from '@/components/ui/authContainer';
 import PrimaryButton from '@/components/ui/primaryButton';
@@ -32,6 +33,7 @@ const maskPhone = (raw?: string) => {
 };
 
 export default function OTPVerification() {
+  const { t } = useTranslation();
   const [otp, setOtp] = useState<string[]>(new Array(OTP_LENGTH).fill(''));
   const inputs = useRef<(TextInput | null)[]>([]);
   const [cooldown, setCooldown] = useState(RESEND_SECONDS);
@@ -73,7 +75,7 @@ export default function OTPVerification() {
   const handleVerify = async () => {
     const code = otp.join('');
     if (code.length !== OTP_LENGTH) {
-      Alert.alert('Incomplete code', `Enter the full ${OTP_LENGTH}-digit code.`);
+      Alert.alert(t('auth.otp.alerts.incomplete_code_title'), `Enter the full ${OTP_LENGTH}-digit code.`);
       return;
     }
 
@@ -84,12 +86,12 @@ export default function OTPVerification() {
         // (You said phone OTP is disabled for now; leaving logic intact but it won’t be used.)
         const storedUser = username || (await SecureStore.getItemAsync('username'));
         if (!storedUser) {
-          Alert.alert('Session expired', 'Please log in again.');
+          Alert.alert('Session expired', t('search.please_log_in_again'));
           router.replace('/(auth)/LoginPage');
           return;
         }
         await submitPhoneVerifyCode(storedUser, code);
-        Alert.alert('Success', 'Phone number verified!');
+        Alert.alert(t('common.success'), t('auth.otp.alerts.phone_verified_message'));
         router.replace('/(tabs)');
       } else {
         // EMAIL FLOW: confirm sign-up code, then SIGN IN and persist the session.
@@ -99,7 +101,7 @@ export default function OTPVerification() {
           (await SecureStore.getItemAsync('pendingEmail')); // if pool uses email-as-username
 
         if (!pendingUsername) {
-          Alert.alert('Missing username', 'Unable to confirm sign up.');
+          Alert.alert(t('auth.otp.alerts.missing_username_title'), t('auth.otp.alerts.unable_confirm_signup'));
           return;
         }
 
@@ -109,7 +111,7 @@ export default function OTPVerification() {
         // Now sign in to obtain tokens
         const pendingPassword = await SecureStore.getItemAsync('pendingPassword');
         if (!pendingPassword) {
-          Alert.alert('Session error', 'Missing password. Please sign in.');
+          Alert.alert(t('auth.otp.alerts.session_error_title'), t('auth.otp.alerts.missing_password_message'));
           router.replace('/(auth)/LoginPage');
           return;
         }
@@ -131,7 +133,7 @@ export default function OTPVerification() {
         router.replace('/(auth)/PersonalDetails');
       }
     } catch (err: any) {
-      Alert.alert('Verification failed', err?.message ?? 'Please try again.');
+      Alert.alert(t('auth.otp.alerts.verification_failed_title'), err?.message ?? 'Please try again.');
     } finally {
       setIsVerifying(false);
     }
@@ -150,7 +152,7 @@ export default function OTPVerification() {
         (await SecureStore.getItemAsync('pendingEmail'));
 
       if (!who) {
-        Alert.alert('Session expired', 'Please log in again.');
+        Alert.alert('Session expired', t('search.please_log_in_again'));
         router.replace('/(auth)/LoginPage');
         return;
       }
@@ -162,9 +164,9 @@ export default function OTPVerification() {
       }
 
       setCooldown(RESEND_SECONDS);
-      Alert.alert('Code resent', `A new code was sent to ${destPretty}.`);
+      Alert.alert(t('auth.otp.alerts.code_resent_title'), `A new code was sent to ${destPretty}.`);
     } catch (err: any) {
-      Alert.alert('Resend failed', err?.message ?? 'Please try again later.');
+      Alert.alert(t('auth.otp.alerts.resend_failed_title'), err?.message ?? 'Please try again later.');
     } finally {
       setIsResending(false);
     }
@@ -228,9 +230,7 @@ export default function OTPVerification() {
       </TouchableOpacity>
 
       <View style={styles.footerInfoBox}>
-        <Text style={styles.footerText}>
-          This OTP is valid for 10 minutes. Never share your code with anyone.
-        </Text>
+        <Text style={styles.footerText}>{t('auth.otp.hint')}</Text>
       </View>
     </AuthContainer>
   );

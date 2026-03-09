@@ -1,5 +1,8 @@
+import { useTranslation } from 'react-i18next';
 // app/(host)/profile.tsx
+import api from '@/services/api';
 import { Href, Link, Stack, useRouter } from 'expo-router';
+import * as SecureStore from 'expo-secure-store';
 import {
   Bell,
   Camera,
@@ -14,7 +17,7 @@ import {
   LogOut,
   Shield,
 } from 'lucide-react-native';
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Alert,
   Image,
@@ -25,6 +28,8 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+
+
 
 interface SettingsItemProps {
   icon: React.ReactNode;
@@ -52,32 +57,98 @@ function SettingsItem({ icon, title, description, href }: SettingsItemProps) {
 }
 
 export default function HostProfileScreen() {
+  const { t } = useTranslation();
   const router = useRouter();
 
-  const hostData = {
-    name: 'Rajesh Kumar',
-    avatar: 'https://i.pravatar.cc/150?img=12',
-    memberSince: 'Oct 2024',
-    isVerified: true,
-    email: 'rajesh.kumar@example.com',
-    kycStatus: 'verified' as 'incomplete' | 'pending' | 'verified',
-    bankVerified: true,
-    propertyVerified: true,
+  type HostData = {
+    name: string;
+    avatar: string;
+    memberSince: string;
+    isVerified: boolean;
+    email: string;
+    kycStatus: 'incomplete' | 'pending' | 'verified';
+    bankVerified: boolean;
+    propertyVerified: boolean;
   };
 
+  const [hostData, setHostData] = useState<HostData>({
+    // sensible defaults while loading
+    name: 'Host',
+    avatar: 'https://i.pravatar.cc/150?img=12',
+    memberSince: '',
+    isVerified: false,
+    email: '—',
+    kycStatus: 'incomplete',
+    bankVerified: false,
+    propertyVerified: false,
+  });
+
+  useEffect(() => {
+    (async () => {
+      try {
+        // token is optional if your api.ts interceptor already adds Authorization,
+        // but getting it here is harmless if you need it later.
+        const token = await SecureStore.getItemAsync('idToken');
+        if (!token) return;
+
+        // call your backend – adjust to /v1/profile if that's what you actually expose
+        const res = await api.get('/v1/profile');
+        const p = (res as any).data ?? res;
+
+        setHostData(prev => ({
+          ...prev,
+          name: p.name || prev.name,
+          email: p.email || prev.email,
+          avatar: p.avatar_url || prev.avatar,
+          // you can wire these when backend supports them
+          isVerified: !!p.is_verified,
+          memberSince: p.member_since || prev.memberSince,
+          // keep existing KYC/bank/property flags for now
+        }));
+      } catch (e) {
+        console.log('Failed to load host profile', e);
+      }
+    })();
+  }, []);
+
+
   const handleSignOut = () => {
-    Alert.alert('Sign out?', 'Are you sure you want to sign out?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Sign out',
-        style: 'destructive',
-        onPress: () => {
-          Alert.alert('Signed Out', 'You have been signed out.');
-          router.replace('/');
+    Alert.alert(
+      t('profile.sign_out_title'),
+      t('profile.sign_out_desc'),
+      [
+        { text: t('common.cancel'), style: 'cancel' },
+        {
+          text: t('profile.sign_out'),
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              // ✅ Clear auth/session-related keys
+              await Promise.all([
+                SecureStore.deleteItemAsync('idToken'),          // stored during auth :contentReference[oaicite:1]{index=1}
+                SecureStore.deleteItemAsync('username'),         // stored during auth :contentReference[oaicite:2]{index=2}
+                SecureStore.deleteItemAsync('user_id'),          // used by websocket init
+                SecureStore.deleteItemAsync('pendingEmail'),
+                SecureStore.deleteItemAsync('pendingUsername'),
+                SecureStore.deleteItemAsync('pendingPassword'),
+              ]);
+
+              // Optional: if you want auth language to reset each time user signs out
+              // await SecureStore.deleteItemAsync('auth_language');
+
+              // ✅ Go to auth flow (pick one)
+              router.replace('/(auth)/LanguageSelection'); // recommended (your auth entry) :contentReference[oaicite:3]{index=3}
+              // router.replace('/(auth)/LoginPage');      // alternative
+            } catch (e) {
+              // Even if SecureStore fails, still force navigation out
+              router.replace('/(auth)/LanguageSelection');
+            }
+          },
         },
-      },
-    ]);
+      ]
+    );
   };
+
 
   const handleSwitchToGuest = () => {
     Alert.alert('Switch Mode', 'Switch back to Guest mode?', [
@@ -117,7 +188,7 @@ export default function HostProfileScreen() {
               <Text style={styles.profileEmail}>{hostData.email}</Text>
               <Link href="/settings/edit-profile" asChild>
                 <TouchableOpacity style={styles.editProfileButton}>
-                  <Text style={styles.editProfileButtonText}>Edit profile</Text>
+                  <Text style={styles.editProfileButtonText}>{t('settings_pages.edit_profile.edit_profile')}</Text>
                 </TouchableOpacity>
               </Link>
             </View>
@@ -140,7 +211,7 @@ export default function HostProfileScreen() {
             </View>
 
             <TouchableOpacity style={styles.switchModePill} onPress={handleSwitchToGuest}>
-              <Text style={styles.switchModePillText}>Switch to Guest</Text>
+              <Text style={styles.switchModePillText}>{t('host.profile.switch_to_guest')}</Text>
             </TouchableOpacity>
           </View>
 
@@ -149,7 +220,7 @@ export default function HostProfileScreen() {
           {/* Status rows */}
           <View style={styles.hostStatusContainer}>
             <View style={styles.hostStatusRow}>
-              <Text style={styles.hostStatusLabel}>KYC Verification</Text>
+              <Text style={styles.hostStatusLabel}>{t('settings_pages.host_onboarding.kyc_verification')}</Text>
               <View
                 style={[
                   styles.statusBadge,
@@ -169,7 +240,7 @@ export default function HostProfileScreen() {
             </View>
 
             <View style={styles.hostStatusRow}>
-              <Text style={styles.hostStatusLabel}>Bank Account</Text>
+              <Text style={styles.hostStatusLabel}>{t('settings.payments.bank_account')}</Text>
               <View
                 style={[
                   styles.statusBadge,
@@ -215,47 +286,47 @@ export default function HostProfileScreen() {
           <Text style={styles.settingsGroupTitle}>Account</Text>
           <SettingsItem
             icon={<Lock size={20} color="#4B5563" />}
-            title="Login & Security"
+            title={t('profile.security')}
             description="Password, 2FA, connected devices"
             href="/settings/login-security"
           />
           <SettingsItem
             icon={<Globe size={20} color="#4B5563" />}
-            title="Language & Region"
+            title={t('profile.language_region')}
             description="English (IN), INR, DD/MM/YYYY"
             href="/settings/language-region"
           />
           <SettingsItem
             icon={<Landmark size={20} color="#4B5563" />}
-            title="Payouts"
+            title={t('profile.payouts')}
             description="Bank account, GSTIN, statements"
             href="/settings/payments"
           />
           <SettingsItem
             icon={<Bell size={20} color="#4B5563" />}
-            title="Notifications"
+            title={t('profile.notifications')}
             description="Push, SMS, WhatsApp preferences"
             href="/settings/notifications"
           />
           <SettingsItem
             icon={<Shield size={20} color="#4B5563" />}
-            title="Privacy & Safety"
+            title={t('profile.privacy_safety')}
             description="Identity verification, data controls"
             href="/settings/privacy-safety"
           />
         </View>
 
         <View style={styles.settingsGroup}>
-          <Text style={styles.settingsGroupTitle}>Support</Text>
+          <Text style={styles.settingsGroupTitle}>{t('profile.support')}</Text>
           <SettingsItem
             icon={<HelpCircle size={20} color="#4B5563" />}
-            title="Help Center"
+            title={t('profile.help_center')}
             description="FAQs, contact support, report issue"
             href="/settings/help-center"
           />
           <SettingsItem
             icon={<FileText size={20} color="#4B5563" />}
-            title="Legal"
+            title={t('profile.legal')}
             description="Terms, privacy policy, licenses"
             href="/settings/help-center"
           />
@@ -265,7 +336,7 @@ export default function HostProfileScreen() {
         <View style={styles.signOutCard}>
           <TouchableOpacity style={styles.signOutButton} onPress={handleSignOut}>
             <LogOut size={18} color="white" />
-            <Text style={styles.signOutButtonText}>Sign out</Text>
+            <Text style={styles.signOutButtonText}>{t('profile.sign_out')}</Text>
           </TouchableOpacity>
           <Text style={styles.versionText}>Version 1.0.0 Build 2025.10</Text>
         </View>

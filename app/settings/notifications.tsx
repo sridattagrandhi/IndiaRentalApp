@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 // app/settings/notifications.tsx
 import { Stack, useRouter } from 'expo-router';
 // Import ArrowLeft for custom header
@@ -12,6 +13,7 @@ interface NotificationSetting {
 }
 
 export default function NotificationsPage() {
+  const { t } = useTranslation();
   const router = useRouter(); // Use router for back navigation
   const [settings, setSettings] = useState<NotificationSetting[]>([
     { id: 'bookings', title: 'Booking confirmations', description: 'Confirmed or modified bookings', channels: { push: true, sms: true, whatsapp: true, email: true } },
@@ -26,11 +28,11 @@ export default function NotificationsPage() {
         ? { ...setting, channels: { ...setting.channels, [channel]: !setting.channels[channel] } }
         : setting
     ));
-    Alert.alert('Preferences Updated');
+    Alert.alert(t('settings.notifications.updated_title'));
   };
 
   const handleSave = () => {
-    Alert.alert('Settings Saved');
+    Alert.alert(t('settings.notifications.saved_title'));
     // Add logic to persist settings
     router.back();
   };
@@ -45,9 +47,9 @@ export default function NotificationsPage() {
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
           <ArrowLeft size={24} color="#111827" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Notifications</Text>
+        <Text style={styles.headerTitle}>{t('profile.notifications')}</Text>
         <TouchableOpacity onPress={handleSave} style={styles.saveButtonContainer}>
-          <Text style={styles.saveButton}>Save</Text>
+          <Text style={styles.saveButton}>{t('common.save')}</Text>
         </TouchableOpacity>
       </View>
 
@@ -55,26 +57,26 @@ export default function NotificationsPage() {
         {/* Info Card */}
         <View style={styles.infoBanner}>
           <Bell size={16} color="#2563EB" />
-          <Text style={styles.infoBannerText}>Choose how you want to receive notifications</Text>
+          <Text style={styles.infoBannerText}>{t('settings.notifications.banner')}</Text>
         </View>
 
         {/* Channel Legend */}
         <View style={styles.legendContainer}>
           <View style={styles.legendItem}>
              <View style={styles.legendIconBg}><Smartphone size={16} color="#4B5563" /></View>
-             <Text style={styles.legendText}>Push</Text>
+             <Text style={styles.legendText}>{t('settings.notifications.channel_push')}</Text>
           </View>
            <View style={styles.legendItem}>
              <View style={styles.legendIconBg}><MessageSquare size={16} color="#4B5563" /></View>
-             <Text style={styles.legendText}>SMS</Text>
+             <Text style={styles.legendText}>{t('settings.notifications.channel_sms')}</Text>
           </View>
            <View style={styles.legendItem}>
              <View style={styles.legendIconBg}><MessageSquare size={16} color="#4B5563" /></View>
-             <Text style={styles.legendText}>WhatsApp</Text>
+             <Text style={styles.legendText}>{t('settings.notifications.channel_whatsapp')}</Text>
           </View>
            <View style={styles.legendItem}>
              <View style={styles.legendIconBg}><MessageSquare size={16} color="#4B5563" /></View>
-             <Text style={styles.legendText}>Email</Text>
+             <Text style={styles.legendText}>{t('settings.notifications.channel_email')}</Text>
           </View>
         </View>
 
@@ -89,7 +91,7 @@ export default function NotificationsPage() {
             </View>
             <View style={styles.switchesContainer}>
               <View style={styles.switchItem}>
-                <Text style={styles.switchLabel}>Push</Text>
+                <Text style={styles.switchLabel}>{t('settings.notifications.channel_push')}</Text>
                 <Switch
                     value={setting.channels.push}
                     onValueChange={() => toggleChannel(setting.id, 'push')}
@@ -98,7 +100,7 @@ export default function NotificationsPage() {
                 />
               </View>
                <View style={styles.switchItem}>
-                <Text style={styles.switchLabel}>SMS</Text>
+                <Text style={styles.switchLabel}>{t('settings.notifications.channel_sms')}</Text>
                 <Switch
                     value={setting.channels.sms}
                     onValueChange={() => toggleChannel(setting.id, 'sms')}
@@ -107,7 +109,7 @@ export default function NotificationsPage() {
                 />
               </View>
               <View style={styles.switchItem}>
-                <Text style={styles.switchLabel}>WhatsApp</Text>
+                <Text style={styles.switchLabel}>{t('settings.notifications.channel_whatsapp')}</Text>
                 <Switch
                     value={setting.channels.whatsapp}
                     onValueChange={() => toggleChannel(setting.id, 'whatsapp')}
@@ -116,7 +118,7 @@ export default function NotificationsPage() {
                 />
               </View>
               <View style={styles.switchItem}>
-                <Text style={styles.switchLabel}>Email</Text>
+                <Text style={styles.switchLabel}>{t('settings.notifications.channel_email')}</Text>
                 <Switch
                     value={setting.channels.email}
                     onValueChange={() => toggleChannel(setting.id, 'email')}

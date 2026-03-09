@@ -8,6 +8,7 @@ export default function ListingsStackLayout() {
       <Stack.Screen name="index" />
       {/* nested screens under listings/ */}
       <Stack.Screen name="create-listing" />
+      <Stack.Screen name="edit-listing" />
     </Stack>
   );
 }

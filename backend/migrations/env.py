@@ -22,22 +22,36 @@ if config.config_file_name:
 def _make_engine():
     db_url = config.get_main_option("sqlalchemy.url")
     connect_args = {}
-    if "+pg8000" in db_url:
-        cafile = os.path.join(os.path.dirname(__file__), "rds-combined-ca-bundle.pem")
+
+    cafile = os.path.join(os.path.dirname(__file__), "rds-combined-ca-bundle.pem")
+    if os.path.exists(cafile):
         ctx = ssl.create_default_context(cafile=cafile)
         connect_args["ssl_context"] = ctx
+
     return create_engine(db_url, poolclass=pool.NullPool, connect_args=connect_args, future=True)
 
+
 def run_migrations_offline():
-    context.configure(url=config.get_main_option("sqlalchemy.url"),
-                      target_metadata=target_metadata, literal_binds=True)
+    context.configure(
+        url=config.get_main_option("sqlalchemy.url"),
+        target_metadata=target_metadata,
+        literal_binds=True,
+        dialect_opts={"paramstyle": "named"},
+        compare_type=True,
+        compare_server_default=True,
+    )
     with context.begin_transaction():
         context.run_migrations()
 
 def run_migrations_online():
     engine = _make_engine()
     with engine.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            compare_type=True,
+            compare_server_default=True,
+        )
         with context.begin_transaction():
             context.run_migrations()
 

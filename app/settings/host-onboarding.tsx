@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 // app/settings/host-onboarding.tsx
 import { Stack, useRouter } from 'expo-router';
 // Import ArrowLeft for custom header
@@ -27,6 +28,7 @@ const initialSteps: OnboardingStep[] = [
 ];
 
 export default function HostOnboardingPage() {
+  const { t } = useTranslation();
   const router = useRouter(); // Use router for back navigation
   const [steps, setSteps] = useState(initialSteps);
 
@@ -60,7 +62,7 @@ export default function HostOnboardingPage() {
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
           <ArrowLeft size={24} color="#111827" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Host Setup</Text>
+        <Text style={styles.headerTitle}>{t('settings_pages.host_onboarding.host_setup')}</Text>
         {/* Placeholder for balance */}
         <View style={styles.headerRightPlaceholder} />
       </View>
@@ -105,7 +107,7 @@ export default function HostOnboardingPage() {
               <View style={styles.stepTextContainer}>
                  <View style={styles.stepTitleRow}>
                     <Text style={styles.stepTitle}>{step.title}</Text>
-                     {step.status === 'completed' && <View style={styles.doneBadge}><Text style={styles.doneBadgeText}>Done</Text></View>}
+                     {step.status === 'completed' && <View style={styles.doneBadge}><Text style={styles.doneBadgeText}>{t('common.done')}</Text></View>}
                      {step.status === 'in-progress' && <View style={styles.inProgressBadge}><Text style={styles.inProgressBadgeText}>In progress</Text></View>}
                  </View>
                  <Text style={styles.stepDescription}>{step.description}</Text>
@@ -130,17 +132,17 @@ export default function HostOnboardingPage() {
              <View style={styles.statusRow}>
                 <View style={styles.statusLabelContainer}><FileText size={16} color="#6B7280"/><Text style={styles.statusLabel}>KYC Verified</Text></View>
                 {/* Example: Replace with actual state later */}
-                <View style={styles.statusBadgePending}><Text style={styles.statusBadgeText}>Not verified</Text></View>
+                <View style={styles.statusBadgePending}><Text style={styles.statusBadgeText}>{t('settings_pages.login_security.not_verified')}</Text></View>
              </View>
              <View style={styles.statusRow}>
                 <View style={styles.statusLabelContainer}><Landmark size={16} color="#6B7280"/><Text style={styles.statusLabel}>Bank Verified</Text></View>
                 {/* Example: Replace with actual state later */}
-                <View style={styles.statusBadgePending}><Text style={styles.statusBadgeText}>Not verified</Text></View>
+                <View style={styles.statusBadgePending}><Text style={styles.statusBadgeText}>{t('settings_pages.login_security.not_verified')}</Text></View>
              </View>
               <View style={styles.statusRow}>
                 <View style={styles.statusLabelContainer}><Home size={16} color="#6B7280"/><Text style={styles.statusLabel}>Property Verified</Text></View>
                 {/* Example: Replace with actual state later */}
-                <View style={styles.statusBadgePending}><Text style={styles.statusBadgeText}>Not verified</Text></View>
+                <View style={styles.statusBadgePending}><Text style={styles.statusBadgeText}>{t('settings_pages.login_security.not_verified')}</Text></View>
              </View>
              <View style={styles.warningBanner}>
                  <Text style={styles.warningBannerText}>Verified badges help guests trust your listings.</Text>

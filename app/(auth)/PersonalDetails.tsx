@@ -1,4 +1,6 @@
+import { useTranslation } from 'react-i18next';
 // app/(auth)/PersonalDetails.tsx
+import { apiPut } from '@/services/api';
 import { FontAwesome } from '@expo/vector-icons';
 import { format, isValid, parse } from 'date-fns';
 import { router } from 'expo-router';
@@ -22,7 +24,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 // 🔐 Cognito helpers
 import { updateAttributes } from '@/services/auth';
-import Constants from 'expo-constants';
 
 // -----------------------------
 // Dropdown options
@@ -105,6 +106,7 @@ function validPhone(raw: string, country: 'IN' | 'US') {
 // Screen
 // -----------------------------
 export default function PersonalDetails() {
+  const { t } = useTranslation();
   // text fields
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
@@ -162,27 +164,42 @@ export default function PersonalDetails() {
   const handleContinue = async () => {
     const finalDob = dobDate || parsedDob;
 
-    if (!fullName.trim() || !finalDob || !genderValue || !phone.trim() || !address.trim() || !city.trim() || !stateValue || !pincode.trim()) {
-      Alert.alert('Missing info', 'Please fill in all required fields.');
+    // 1) For "Missing info", just check that DOB TEXT is filled
+    if (
+      !fullName.trim() ||
+      !dobText.trim() ||              // ✅ check text, not parsed Date
+      !genderValue ||
+      !phone.trim() ||
+      !address.trim() ||
+      !city.trim() ||
+      !stateValue ||
+      !pincode.trim()
+    ) {
+      Alert.alert(t('auth.personal_details.alerts.missing_info_title'), t('auth.personal_details.alerts.missing_info_message'));
       return;
     }
-    if (!dobValidAndAdult) {
-      Alert.alert('Invalid DOB', 'Enter a valid DOB (must be 18+ and not in the future).');
+
+    // 2) Now separately enforce that we could parse it AND user is 18+
+    if (!finalDob || !dobValidAndAdult) {
+      Alert.alert(t('auth.personal_details.alerts.invalid_dob_title'), t('auth.personal_details.alerts.invalid_dob_message')
+      );
       return;
     }
+
     if (!validPhone(phone.trim(), countryValue)) {
-      Alert.alert('Invalid phone', 'Enter a valid phone number.');
+      Alert.alert(t('auth.personal_details.alerts.invalid_phone_title'), t('auth.personal_details.alerts.invalid_phone_message'));
       return;
     }
+
     if (!/^\d{5,6}$/.test(pincode.trim())) {
-      Alert.alert('Invalid postal code', 'Enter a 6-digit PIN (IN) or 5-digit ZIP (US).');
+      Alert.alert(t('auth.personal_details.alerts.invalid_postal_title'), t('auth.personal_details.alerts.invalid_postal_message'));
       return;
     }
 
     try {
       const storedUsername = await SecureStore.getItemAsync('username');
       if (!storedUsername) {
-        Alert.alert('Session expired', 'Please log in again.');
+        Alert.alert('Session expired', t('search.please_log_in_again'));
         router.replace('/(auth)/LoginPage');
         return;
       }
@@ -212,27 +229,32 @@ export default function PersonalDetails() {
       };
       await SecureStore.setItemAsync('userProfile', JSON.stringify(userProfile));
 
-      await fetch(`${Constants.expoConfig?.extra?.API_URL}/v1/profile`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({
-          name: fullName,
-          birthdate: yyyyMMDD,      // 'YYYY-MM-DD'
-          gender: genderValue,
-          phone: e164,
-          address, city,
-          state: stateValue,
-          pincode,
-          country: countryValue,
-        })
+      if (!token) {
+        Alert.alert('Session expired', t('search.please_log_in_again'));
+        router.replace('/(auth)/LoginPage');
+        return;
+      }
+
+      // Save profile to backend (uses EXPO_PUBLIC_API_BASE_URL + Authorization interceptor)
+      await apiPut('/v1/profile', {
+        name: fullName,
+        birthdate: yyyyMMDD,
+        gender: genderValue,
+        phone: e164,
+        address,
+        city,
+        state: stateValue,
+        pincode,
+        country: countryValue,
       });
 
       // Go straight to success (no phone OTP page)
       router.push('/(auth)/SuccessPage');
     } catch (err: any) {
-      Alert.alert('Error', err?.message ?? 'Could not save your details');
+      Alert.alert(t('common.error'), err?.message ?? 'Could not save your details');
     }
   };
+
 
 
   // figure out a nice phone placeholder based on country
@@ -256,13 +278,13 @@ export default function PersonalDetails() {
           <View style={styles.headerIcon}>
             <FontAwesome name="user-o" size={28} color="#fff" />
           </View>
-          <Text style={styles.title}>Personal Details</Text>
-          <Text style={styles.subtitle}>Please provide your personal information</Text>
+          <Text style={styles.title}>{t('settings.edit_profile.personal_details')}</Text>
+          <Text style={styles.subtitle}>{t('auth.personal_details.subtitle')}</Text>
 
           {/* Full Name */}
-          <Field label="Full Name *">
+          <Field label={t('auth.personal_details.full_name_label')}>
             <TextInput
-              placeholder="Enter your full name"
+              placeholder={t('auth.personal_details.full_name_placeholder')}
               placeholderTextColor="#9AA0A6"
               style={styles.input}
               value={fullName}
@@ -273,7 +295,7 @@ export default function PersonalDetails() {
           </Field>
 
           {/* DOB (typed + calendar) */}
-          <Field label="Date of Birth *">
+          <Field label={t('auth.personal_details.dob_label')}>
             <View style={styles.inputRow}>
               <MaskedTextInput
                 mask="99/99/9999"
@@ -302,27 +324,29 @@ export default function PersonalDetails() {
           </Field>
 
           {/* Gender */}
-          <Field label="Gender *">
-            <DropDownPicker
-              open={genderOpen}
-              value={genderValue}
-              items={genderList}
-              setOpen={setGenderOpen}
-              setValue={setGenderValue}
-              setItems={setGenderList}
-              placeholder="Select gender"
-              listMode="SCROLLVIEW"
-              dropDownDirection="BOTTOM"
-              onOpen={onGenderOpen}
-              style={styles.dropdown}
-              dropDownContainerStyle={styles.dropdownContainer}
-              zIndex={3000}
-              zIndexInverse={1000}
-            />
+          <Field label={t('auth.personal_details.gender_label')}>
+            <View style={{ zIndex: 5000, marginBottom: genderOpen ? 180 : 0 }}>
+              <DropDownPicker
+                open={genderOpen}
+                value={genderValue}
+                items={genderList}
+                setOpen={setGenderOpen}
+                setValue={setGenderValue}
+                setItems={setGenderList}
+                placeholder={t('auth.personal_details.gender_placeholder')}
+                listMode="SCROLLVIEW"
+                dropDownDirection="BOTTOM"
+                onOpen={onGenderOpen}
+                style={styles.dropdown}
+                dropDownContainerStyle={styles.dropdownContainer}
+                zIndex={5000}
+                zIndexInverse={1000}
+              />
+            </View>
           </Field>
 
           {/* Country + Phone in a row */}
-          <Field label="Phone Number *">
+          <Field label={t('auth.personal_details.phone_label')}>
             <View style={{ flexDirection: 'row', gap: 10 }}>
               <View style={{ flex: 0.9 }}>
                 <DropDownPicker
@@ -332,13 +356,13 @@ export default function PersonalDetails() {
                   setOpen={setCountryOpen}
                   setValue={setCountryValue as any}
                   setItems={setCountryList}
-                  placeholder="Country"
+                  placeholder={t('settings.edit_profile.country')}
                   listMode="SCROLLVIEW"
                   onOpen={onCountryOpen}
                   style={styles.dropdown}
                   dropDownContainerStyle={styles.dropdownContainer}
                   zIndex={4000}
-                  zIndexInverse={3000}
+                  zIndexInverse={2000}
                 />
               </View>
               <View style={{ flex: 1.6 }}>
@@ -355,9 +379,9 @@ export default function PersonalDetails() {
           </Field>
 
           {/* Address */}
-          <Field label="Address *">
+          <Field label={t('auth.personal_details.address_label')}>
             <TextInput
-              placeholder="Street address"
+              placeholder={t('settings.edit_profile.street_address')}
               placeholderTextColor="#9AA0A6"
               style={styles.input}
               value={address}
@@ -366,9 +390,9 @@ export default function PersonalDetails() {
           </Field>
 
           {/* City */}
-          <Field label="City *">
+          <Field label={t('auth.personal_details.city_label')}>
             <TextInput
-              placeholder="City"
+              placeholder={t('settings.edit_profile.city')}
               placeholderTextColor="#9AA0A6"
               style={styles.input}
               value={city}
@@ -377,7 +401,7 @@ export default function PersonalDetails() {
           </Field>
 
           {/* State */}
-          <Field label="State *">
+          <Field label={t('auth.personal_details.state_label')}>
             <DropDownPicker
               open={stateOpen}
               value={stateValue}
@@ -385,7 +409,7 @@ export default function PersonalDetails() {
               setOpen={setStateOpen}
               setValue={setStateValue}
               setItems={setStateList}
-              placeholder="Select state"
+              placeholder={t('auth.personal_details.state_placeholder')}
               searchable
               searchPlaceholder="Search states"
               listMode="SCROLLVIEW"

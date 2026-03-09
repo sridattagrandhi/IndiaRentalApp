@@ -15,8 +15,10 @@ const config: ExpoConfig = {
     supportsTablet: true,
     bundleIdentifier: 'com.sridatta.uberairbnb',
     infoPlist: {
-        NSLocationWhenInUseUsageDescription:
-          "We need your location to find stays near you."
+        "NSLocationWhenInUseUsageDescription": "We use your location to show nearby stays.",
+        "NSCameraUsageDescription": "Allow the app to use the camera to take listing photos.",
+        "NSPhotoLibraryUsageDescription": "Allow the app to access your photo library to upload listing photos.",
+        "NSPhotoLibraryAddUsageDescription": "Allow the app to save photos to your library."
     }
   },
   android: {
@@ -47,6 +49,7 @@ const config: ExpoConfig = {
       },
     ],
     "expo-secure-store",
+    "expo-web-browser",
   ],
   experiments: { typedRoutes: true, reactCompiler: true },
   extra: {
