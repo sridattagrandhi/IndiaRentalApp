@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 // app/settings/help-center.tsx
 import { Stack, useRouter } from 'expo-router';
 // Import ArrowLeft for custom header
@@ -49,6 +50,7 @@ const AccordionItem = ({ question, answer }: AccordionItemProps) => {
 };
 
 export default function HelpCenterPage() {
+  const { t } = useTranslation();
   const router = useRouter(); // Use router for back navigation
   const [searchQuery, setSearchQuery] = useState('');
   const [showReportDialog, setShowReportDialog] = useState(false);
@@ -57,8 +59,8 @@ export default function HelpCenterPage() {
 
   const handleContactSupport = (method: string) => Alert.alert(`Contact ${method}`, `Opening ${method} support...`);
   const handleSubmitReport = () => {
-    if (!reportSubject.trim() || !reportDetails.trim()) { Alert.alert('Error', 'Please fill all fields'); return; }
-    Alert.alert('Report Submitted', 'Our team will contact you shortly.');
+    if (!reportSubject.trim() || !reportDetails.trim()) { Alert.alert(t('common.error'), t('settings.help_center.error_fill_all')); return; }
+    Alert.alert(t('settings.help_center.report_submitted_title'), t('settings.help_center.report_submitted_msg'));
     setShowReportDialog(false); setReportSubject(''); setReportDetails('');
   };
 
@@ -83,7 +85,7 @@ export default function HelpCenterPage() {
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
           <ArrowLeft size={24} color="#111827" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Help Center</Text>
+        <Text style={styles.headerTitle}>{t('profile.help_center')}</Text>
         {/* Placeholder for balance */}
         <View style={styles.headerRightPlaceholder} />
       </View>
@@ -93,17 +95,17 @@ export default function HelpCenterPage() {
         <View style={styles.searchContainer}>
           <Search size={18} color="#6B7280" style={styles.searchIcon} />
           <TextInput
-            placeholder="Search for help..." value={searchQuery} onChangeText={setSearchQuery}
+            placeholder={t('settings.help_center.search_placeholder')} value={searchQuery} onChangeText={setSearchQuery}
             placeholderTextColor="#6B7280" style={styles.searchInput}
           />
         </View>
 
         {/* Contact Support */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Contact Support</Text>
-          <ContactOption icon={<MessageCircle size={20} color="#111827" />} title="Live Chat" subtitle="Available 24/7" onPress={() => handleContactSupport('Chat')} />
-          <ContactOption icon={<Phone size={20} color="#111827" />} title="Call Support" subtitle="1800-123-4567" onPress={() => handleContactSupport('Call')} />
-          <ContactOption icon={<Mail size={20} color="#111827" />} title="Email Support" subtitle="support@yourapp.com" onPress={() => handleContactSupport('Email')} />
+          <Text style={styles.sectionTitle}>{t('settings.help_center.contact_support')}</Text>
+          <ContactOption icon={<MessageCircle size={20} color="#111827" />} title={t('settings.help_center.live_chat')} subtitle={t('settings.help_center.live_chat_desc')} onPress={() => handleContactSupport('Chat')} />
+          <ContactOption icon={<Phone size={20} color="#111827" />} title={t('settings.help_center.call_support')} subtitle={t('settings.help_center.call_support_desc')} onPress={() => handleContactSupport('Call')} />
+          <ContactOption icon={<Mail size={20} color="#111827" />} title={t('settings.help_center.email_support')} subtitle={t('settings.help_center.email_support_desc')} onPress={() => handleContactSupport('Email')} />
         </View>
 
         <View style={styles.divider} />
@@ -111,16 +113,16 @@ export default function HelpCenterPage() {
         {/* Report an Issue */}
         <TouchableOpacity style={styles.reportButton} onPress={() => setShowReportDialog(true)}>
            <Flag size={16} color="#111827" />
-           <Text style={styles.reportButtonText}>Report an issue</Text>
+           <Text style={styles.reportButtonText}>{t('settings.help_center.report_issue')}</Text>
         </TouchableOpacity>
 
         <View style={styles.divider} />
 
         {/* FAQs */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Frequently Asked Questions</Text>
+          <Text style={styles.sectionTitle}>{t('settings.help_center.faqs_title')}</Text>
           {filteredFaqs.length === 0 ? (
-             <View style={styles.emptyCard}><HelpCircle size={48} color="#D1D5DB" /><Text style={styles.emptyText}>No results found</Text></View>
+             <View style={styles.emptyCard}><HelpCircle size={48} color="#D1D5DB" /><Text style={styles.emptyText}>{t('settings.help_center.no_results')}</Text></View>
           ) : (
             filteredFaqs.map((category) => (
               <View key={category.category} style={styles.faqCategory}>
@@ -134,10 +136,10 @@ export default function HelpCenterPage() {
         {/* Additional Resources */}
         <View style={styles.divider} />
          <View style={styles.section}>
-             <Text style={styles.sectionTitle}>Additional Resources</Text>
-             <ResourceLink title="Terms of Service" onPress={() => Alert.alert('Navigate', 'Open Terms')} />
-             <ResourceLink title="Privacy Policy" onPress={() => Alert.alert('Navigate', 'Open Privacy Policy')} />
-             <ResourceLink title="Refund Policy" onPress={() => Alert.alert('Navigate', 'Open Refund Policy')} />
+             <Text style={styles.sectionTitle}>{t('settings.help_center.additional_resources')}</Text>
+             <ResourceLink title={t('settings.help_center.terms')} onPress={() => Alert.alert('Navigate', 'Open Terms')} />
+             <ResourceLink title={t('settings.help_center.privacy')} onPress={() => Alert.alert('Navigate', 'Open Privacy Policy')} />
+             <ResourceLink title={t('settings.help_center.refund')} onPress={() => Alert.alert('Navigate', 'Open Refund Policy')} />
          </View>
       </ScrollView>
 
@@ -145,17 +147,17 @@ export default function HelpCenterPage() {
        <Modal visible={showReportDialog} transparent animationType="fade" onRequestClose={() => setShowReportDialog(false)}>
          <View style={styles.modalOverlay}>
            <View style={styles.modalContent}>
-             <Text style={styles.modalTitle}>Report an Issue</Text>
-             <Text style={styles.modalDescription}>Describe the problem you're facing.</Text>
-             <TextInput style={styles.input} placeholder="Subject" value={reportSubject} onChangeText={setReportSubject} />
-             <TextInput style={[styles.input, styles.textarea]} placeholder="Details..." value={reportDetails} onChangeText={setReportDetails} multiline numberOfLines={4}/>
-             <Text style={styles.modalNote}>Our team will review and contact you.</Text>
+             <Text style={styles.modalTitle}>{t('settings.help_center.report_issue_title')}</Text>
+             <Text style={styles.modalDescription}>{t('settings.help_center.report_details_hint')}</Text>
+             <TextInput style={styles.input} placeholder={t('settings.help_center.report_subject')} value={reportSubject} onChangeText={setReportSubject} />
+             <TextInput style={[styles.input, styles.textarea]} placeholder={t('settings.help_center.report_details')} value={reportDetails} onChangeText={setReportDetails} multiline numberOfLines={4}/>
+             <Text style={styles.modalNote}>{t('settings.help_center.report_review_msg')}</Text>
              <View style={styles.modalActions}>
                <TouchableOpacity style={styles.modalButtonSecondary} onPress={() => setShowReportDialog(false)}>
-                 <Text style={styles.modalButtonTextSecondary}>Cancel</Text>
+                 <Text style={styles.modalButtonTextSecondary}>{t('common.cancel')}</Text>
                </TouchableOpacity>
                <TouchableOpacity style={styles.modalButtonPrimary} onPress={handleSubmitReport}>
-                 <Text style={styles.modalButtonTextPrimary}>Submit</Text>
+                 <Text style={styles.modalButtonTextPrimary}>{t('settings.help_center.submit')}</Text>
                </TouchableOpacity>
              </View>
            </View>

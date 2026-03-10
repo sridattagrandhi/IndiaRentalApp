@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 // app/settings/privacy-safety.tsx
 import { Stack, useRouter } from 'expo-router';
 // Import ArrowLeft for custom header
@@ -9,6 +10,7 @@ import { Alert, Modal, SafeAreaView, ScrollView, StyleSheet, Switch, Text, Touch
 interface BlockedUser { id: string; name: string; blockedDate: Date; }
 
 export default function PrivacySafetyPage() {
+  const { t } = useTranslation();
   const router = useRouter(); // Use router for back navigation
   const [isVerified, setIsVerified] = useState(false); // Overall verification status
   const [panVerified, setPanVerified] = useState(false);
@@ -21,16 +23,16 @@ export default function PrivacySafetyPage() {
   ]);
 
   const handleVerifyDocument = (type: string) => Alert.alert(`Verify ${type}`, `Start ${type} verification flow...`);
-  const handleDownloadData = () => { Alert.alert('Download Started', 'Your data download link will be emailed.'); setShowDataDialog(false); };
+  const handleDownloadData = () => { Alert.alert(t('settings.privacy_safety.download_started_title'), t('settings.privacy_safety.download_started_msg')); setShowDataDialog(false); };
   const handleDeleteData = () => {
-    Alert.alert('Delete Account?', 'This action is permanent and cannot be undone.', [
+    Alert.alert(t('settings.privacy_safety.delete_account_title'), t('settings.privacy_safety.delete_account_confirm'), [
         { text: 'Cancel', style: 'cancel'},
-        { text: 'Delete', style: 'destructive', onPress: () => Alert.alert('Request Submitted', 'Account deletion request received.')}
+        { text: 'Delete', style: 'destructive', onPress: () => Alert.alert(t('settings.privacy_safety.request_submitted_title'), t('settings.privacy_safety.request_submitted_msg'))}
     ]);
   };
-  const handleUnblock = (name: string) => Alert.alert('Unblock User?', `Unblock ${name}?`, [
+  const handleUnblock = (name: string) => Alert.alert(t('settings.privacy_safety.unblock_user_title'), `Unblock ${name}?`, [
       {text: 'Cancel', style: 'cancel'},
-      {text: 'Unblock', onPress: () => Alert.alert('User Unblocked')} // Add actual logic
+      {text: 'Unblock', onPress: () => Alert.alert(t('settings.privacy_safety.user_unblocked_title'))} // Add actual logic
   ]);
 
   return (
@@ -43,7 +45,7 @@ export default function PrivacySafetyPage() {
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
           <ArrowLeft size={24} color="#111827" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Privacy & Safety</Text>
+        <Text style={styles.headerTitle}>{t('profile.privacy_safety')}</Text>
         {/* Placeholder for balance */}
         <View style={styles.headerRightPlaceholder} />
       </View>
@@ -52,20 +54,20 @@ export default function PrivacySafetyPage() {
         {/* Identity Verification */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
-            <Shield size={20} color="#4B5563" /><Text style={styles.sectionTitle}>Identity Verification</Text>
+            <Shield size={20} color="#4B5563" /><Text style={styles.sectionTitle}>{t('settings.privacy_safety.identity_verification')}</Text>
           </View>
           {!isVerified && (
             <View style={styles.warningBanner}>
                <AlertCircle size={16} color="#B45309" />
-               <Text style={styles.warningBannerText}>Complete verification to build trust and unlock features</Text>
+               <Text style={styles.warningBannerText}>{t('settings.privacy_safety.verify_banner')}</Text>
             </View>
           )}
           <View style={styles.card}>
-             <VerificationItem label="PAN Card" description="Permanent Account Number" verified={panVerified} onVerify={() => handleVerifyDocument('PAN')} />
+             <VerificationItem label={t('settings.privacy_safety.pan_card')} description="Permanent Account Number" verified={panVerified} onVerify={() => handleVerifyDocument('PAN')} />
              <View style={styles.divider} />
-             <VerificationItem label="Aadhaar Card" description="Unique Identification" verified={aadhaarVerified} onVerify={() => handleVerifyDocument('Aadhaar')} />
+             <VerificationItem label={t('settings.privacy_safety.aadhaar_card')} description="Unique Identification" verified={aadhaarVerified} onVerify={() => handleVerifyDocument('Aadhaar')} />
              <View style={styles.divider} />
-             <VerificationItem label="Address Proof" description="Utility bill or rental agreement" verified={addressVerified} onVerify={() => handleVerifyDocument('Address')} isUpload />
+             <VerificationItem label={t('settings.privacy_safety.address_proof')} description="Utility bill or rental agreement" verified={addressVerified} onVerify={() => handleVerifyDocument('Address')} isUpload />
           </View>
         </View>
 
@@ -74,17 +76,17 @@ export default function PrivacySafetyPage() {
         {/* Privacy Settings */}
         <View style={styles.section}>
            <View style={styles.sectionHeader}>
-            <Eye size={20} color="#4B5563" /><Text style={styles.sectionTitle}>Privacy Settings</Text>
+            <Eye size={20} color="#4B5563" /><Text style={styles.sectionTitle}>{t('settings.privacy_safety.privacy_settings')}</Text>
           </View>
            <View style={styles.card}>
               <SettingSwitchItem
-                title="Profile visibility" description="Allow hosts to see your profile"
+                title={t('settings.privacy_safety.profile_visibility')} description="Allow hosts to see your profile"
                 value={profileVisibility} onValueChange={setProfileVisibility}
               />
            </View>
             <View style={styles.card}>
               <SettingSwitchItem
-                title="Show verification badge" description="Display verified badge on profile"
+                title={t('settings.privacy_safety.show_badge')} description="Display verified badge on profile"
                 value={isVerified} onValueChange={() => {}} disabled // Cannot toggle this directly
               />
            </View>
@@ -95,10 +97,10 @@ export default function PrivacySafetyPage() {
         {/* Blocked Users */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
-            <Ban size={20} color="#4B5563" /><Text style={styles.sectionTitle}>Blocked Users</Text>
+            <Ban size={20} color="#4B5563" /><Text style={styles.sectionTitle}>{t('settings.privacy_safety.blocked_users')}</Text>
           </View>
           {blockedUsers.length === 0 ? (
-            <View style={[styles.card, styles.centerTextCard]}><Text style={styles.mutedText}>No blocked users</Text></View>
+            <View style={[styles.card, styles.centerTextCard]}><Text style={styles.mutedText}>{t('settings.privacy_safety.no_blocked_users')}</Text></View>
           ) : (
             blockedUsers.map((user) => (
               <View key={user.id} style={[styles.card, styles.blockedUserCard]}>
@@ -107,7 +109,7 @@ export default function PrivacySafetyPage() {
                   <Text style={styles.blockedUserDate}>Blocked on {user.blockedDate.toLocaleDateString('en-IN')}</Text>
                 </View>
                 <TouchableOpacity style={styles.unblockButton} onPress={() => handleUnblock(user.name)}>
-                  <Text style={styles.unblockButtonText}>Unblock</Text>
+                  <Text style={styles.unblockButtonText}>{t('settings.privacy_safety.unblock')}</Text>
                 </TouchableOpacity>
               </View>
             ))
@@ -118,26 +120,26 @@ export default function PrivacySafetyPage() {
 
         {/* Data Controls */}
         <View style={styles.section}>
-           <Text style={styles.sectionTitle}>Data Controls</Text>
+           <Text style={styles.sectionTitle}>{t('settings.privacy_safety.data_controls')}</Text>
            <TouchableOpacity style={styles.card} onPress={() => setShowDataDialog(true)}>
               <View style={styles.dataControlRow}>
                 <View>
-                    <Text style={styles.dataControlTitle}>Download your data</Text>
-                    <Text style={styles.dataControlDesc}>Get a copy of your personal info</Text>
+                    <Text style={styles.dataControlTitle}>{t('settings.privacy_safety.download_your_data')}</Text>
+                    <Text style={styles.dataControlDesc}>{t('settings.privacy_safety.download_your_data_desc')}</Text>
                 </View>
                 <TouchableOpacity style={styles.requestButton} onPress={() => setShowDataDialog(true)}>
-                    <Text style={styles.requestButtonText}>Request</Text>
+                    <Text style={styles.requestButtonText}>{t('settings.privacy_safety.request')}</Text>
                 </TouchableOpacity>
               </View>
            </TouchableOpacity>
            <View style={[styles.card, styles.deleteCard]}>
                <View style={styles.dataControlRow}>
                 <View>
-                    <Text style={[styles.dataControlTitle, styles.deleteTitle]}>Delete account</Text>
-                    <Text style={styles.dataControlDesc}>Permanently delete account and data</Text>
+                    <Text style={[styles.dataControlTitle, styles.deleteTitle]}>{t('settings.privacy_safety.delete_account')}</Text>
+                    <Text style={styles.dataControlDesc}>{t('settings.privacy_safety.delete_account_desc')}</Text>
                 </View>
                 <TouchableOpacity style={styles.deleteButton} onPress={handleDeleteData}>
-                    <Text style={styles.deleteButtonText}>Delete</Text>
+                    <Text style={styles.deleteButtonText}>{t('common.delete')}</Text>
                 </TouchableOpacity>
               </View>
            </View>
@@ -147,10 +149,10 @@ export default function PrivacySafetyPage() {
          <View style={styles.infoBanner}>
             <Shield size={16} color="#2563EB" />
             <View style={styles.infoBannerContent}>
-                <Text style={styles.infoBannerTitle}>We take your privacy seriously</Text>
-                <Text style={styles.infoListItem}>• Your data is encrypted and securely stored</Text>
-                <Text style={styles.infoListItem}>• We never share info without consent</Text>
-                <Text style={styles.infoListItem}>• You have full control over your data</Text>
+                <Text style={styles.infoBannerTitle}>{t('settings.privacy_safety.subtitle')}</Text>
+                <Text style={styles.infoListItem}>{t('settings.privacy_safety.encrypted')}</Text>
+                <Text style={styles.infoListItem}>{t('settings.privacy_safety.we_never_share')}</Text>
+                <Text style={styles.infoListItem}>{t('settings.privacy_safety.you_control')}</Text>
             </View>
          </View>
       </ScrollView>
@@ -160,18 +162,18 @@ export default function PrivacySafetyPage() {
          <View style={styles.modalOverlay}>
            <View style={styles.modalContent}>
              <Text style={styles.modalTitle}>Download Your Data</Text>
-             <Text style={styles.modalDescription}>We'll email a copy to your registered email address.</Text>
-              <Text style={styles.modalListHeader}>Download includes:</Text>
-              <Text style={styles.modalListItem}>• Profile information</Text>
-              <Text style={styles.modalListItem}>• Booking history</Text>
-              <Text style={styles.modalListItem}>• Messages and reviews</Text>
-              <Text style={styles.modalNote}>This may take up to 48 hours.</Text>
+             <Text style={styles.modalDescription}>{t('settings.privacy_safety.download_email_note')}</Text>
+              <Text style={styles.modalListHeader}>{t('settings.privacy_safety.download_includes')}</Text>
+              <Text style={styles.modalListItem}>{t('settings.privacy_safety.download_item_profile')}</Text>
+              <Text style={styles.modalListItem}>{t('settings.privacy_safety.download_item_bookings')}</Text>
+              <Text style={styles.modalListItem}>{t('settings.privacy_safety.download_item_messages')}</Text>
+              <Text style={styles.modalNote}>{t('settings.privacy_safety.may_take_48h')}</Text>
              <View style={styles.modalActions}>
                <TouchableOpacity style={styles.modalButtonSecondary} onPress={() => setShowDataDialog(false)}>
-                 <Text style={styles.modalButtonTextSecondary}>Cancel</Text>
+                 <Text style={styles.modalButtonTextSecondary}>{t('common.cancel')}</Text>
                </TouchableOpacity>
                <TouchableOpacity style={styles.modalButtonPrimary} onPress={handleDownloadData}>
-                 <Text style={styles.modalButtonTextPrimary}>Request</Text>
+                 <Text style={styles.modalButtonTextPrimary}>{t('settings.privacy_safety.request')}</Text>
                </TouchableOpacity>
              </View>
            </View>
@@ -184,6 +186,7 @@ export default function PrivacySafetyPage() {
 // --- Helper Components ---
 interface VerificationItemProps { label: string; description: string; verified: boolean; onVerify: () => void; isUpload?: boolean;}
 function VerificationItem({ label, description, verified, onVerify, isUpload = false }: VerificationItemProps) {
+  const { t } = useTranslation();
   return (
     <View style={styles.verificationItem}>
       <View style={styles.verificationText}>
@@ -196,7 +199,7 @@ function VerificationItem({ label, description, verified, onVerify, isUpload = f
       {verified ? (
         <View style={styles.verifiedBadge}>
             <CheckCircle size={12} color="#065F46" />
-            <Text style={styles.verifiedBadgeText}>Verified</Text>
+            <Text style={styles.verifiedBadgeText}>{t('settings.payments.verified')}</Text>
         </View>
       ) : (
         <TouchableOpacity style={styles.verifyButton} onPress={onVerify}>

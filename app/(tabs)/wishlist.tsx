@@ -1,29 +1,31 @@
+import { useTranslation } from 'react-i18next';
 // app/(tabs)/wishlist.tsx
+import { apiDelete, apiGet, apiPost, apiPut } from '@/services/api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Image } from 'expo-image';
 import { Stack, useFocusEffect, useRouter } from 'expo-router';
 import {
-    ArrowLeft, // Ensure this is imported
-    Edit, FolderPlus,
-    Heart,
-    MapPin,
-    MoreHorizontal,
-    Plus,
-    Star, Trash2,
-    X
+  ArrowLeft, // Ensure this is imported
+  Edit, FolderPlus,
+  Heart,
+  MapPin,
+  MoreHorizontal,
+  Plus,
+  Star, Trash2,
+  X
 } from 'lucide-react-native';
 import React, { useCallback, useState } from 'react';
 import {
-    Alert,
-    FlatList,
-    Modal,
-    SafeAreaView, // Use SafeAreaView for the main views
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  Alert,
+  FlatList,
+  Modal,
+  SafeAreaView, // Use SafeAreaView for the main views
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -47,20 +49,68 @@ interface Wishlist {
   coverImage?: string;
 }
 
+// --- Backend API types (shape from serializers.py) ---
+// add these near your interfaces
+type WishlistApiType = {
+  id: number;
+  name: string;
+  description: string | null;
+  count: number;
+  cover_image: string | null;
+};
+
+type SavedItemApiType = {
+  id: number;
+  listing: {
+    id: number;
+    title: string;
+    city: string;
+    price_per_night: number;
+    avg_rating?: number | null;
+    cover_photo_url?: string | null;
+  };
+};
+
+// helper to convert backend -> UI type
+const backendWishlistToUi = (w: WishlistApiType): Wishlist => ({
+  id: String(w.id),
+  name: w.name,
+  description: w.description ?? '',
+  count: w.count ?? 0,
+  coverImage: w.cover_image ?? undefined,
+});
+
+const backendItemToSavedProperty = (
+  x: SavedItemApiType,
+  listId: string
+): SavedProperty => {
+  const l = x.listing;
+  return {
+    id: String(l.id),
+    name: l.title,
+    location: l.city,
+    price: l.price_per_night,
+    rating: l.avg_rating ?? 0,
+    image: l.cover_photo_url ?? '',
+    listId,
+  };
+};
+
+
 // --- AsyncStorage Keys ---
 const WISHLISTS_KEY = '@wishlists';
 const SAVED_PROPERTIES_KEY = '@saved_properties';
 
 // --- Mock Data (Initial Load Only) ---
-const initialWishlists: Wishlist[] = [
-    { id: '1', name: 'Road trips', description: 'Stays along popular routes', count: 0, coverImage: 'https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?w=400&h=300&fit=crop'},
-    { id: '2', name: 'Goa villas', description: 'Beach vacation spots', count: 0, coverImage: 'https://images.unsplash.com/photo-1559827260-dc66d52bef19?w=400&h=300&fit=crop'},
-];
-const initialSavedProperties: SavedProperty[] = [
-    { id: '1', name: 'Modern Studio', location: 'Koramangala, Bangalore', price: 2200, rating: 4.8, image: 'https://images.unsplash.com/photo-1560448204-e02f11c3d0e2?w=400&h=300&fit=crop', listId: '1', coordinates: { latitude: 12.935192, longitude: 77.624481 } },
-    { id: '5', name: 'Mountain Cottage', location: 'Lonavala', price: 3500, rating: 4.6, image: 'https://images.unsplash.com/photo-1585544493593-84f1b838493a?w=400&h=300&fit=crop', listId: '1', coordinates: { latitude: 18.7557, longitude: 73.4091 } },
-    { id: '2', name: 'Beachfront Villa', location: 'Candolim, Goa', price: 8500, rating: 4.9, image: 'https://images.unsplash.com/photo-1580587771525-78b9dba3b914?w=400&h=300&fit=crop', listId: '2', coordinates: { latitude: 15.5180, longitude: 73.7667 } },
-];
+// const initialWishlists: Wishlist[] = [
+//     { id: '1', name: 'Road trips', description: 'Stays along popular routes', count: 0, coverImage: 'https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?w=400&h=300&fit=crop'},
+//     { id: '2', name: 'Goa villas', description: 'Beach vacation spots', count: 0, coverImage: 'https://images.unsplash.com/photo-1559827260-dc66d52bef19?w=400&h=300&fit=crop'},
+// ];
+// const initialSavedProperties: SavedProperty[] = [
+//     { id: '1', name: 'Modern Studio', location: 'Koramangala, Bangalore', price: 2200, rating: 4.8, image: 'https://images.unsplash.com/photo-1560448204-e02f11c3d0e2?w=400&h=300&fit=crop', listId: '1', coordinates: { latitude: 12.935192, longitude: 77.624481 } },
+//     { id: '5', name: 'Mountain Cottage', location: 'Lonavala', price: 3500, rating: 4.6, image: 'https://images.unsplash.com/photo-1585544493593-84f1b838493a?w=400&h=300&fit=crop', listId: '1', coordinates: { latitude: 18.7557, longitude: 73.4091 } },
+//     { id: '2', name: 'Beachfront Villa', location: 'Candolim, Goa', price: 8500, rating: 4.9, image: 'https://images.unsplash.com/photo-1580587771525-78b9dba3b914?w=400&h=300&fit=crop', listId: '2', coordinates: { latitude: 15.5180, longitude: 73.7667 } },
+// ];
 
 // --- Helper Functions for AsyncStorage ---
 const storeData = async (key: string, value: any) => {
@@ -122,6 +172,7 @@ function PropertyCard({ property, onRemove, onClick }: PropertyCardProps) {
     const imageSource = property.image && property.image.startsWith('http')
         ? { uri: property.image }
         : { uri: 'https://images.unsplash.com/photo-1560448204-e02f11c3d0e2?w=400&h=300&fit=crop' }; // Default image
+    const { t, i18n } = useTranslation();
 
   return (
     <TouchableOpacity style={styles.propertyCardContainer} onPress={onClick}>
@@ -145,7 +196,7 @@ function PropertyCard({ property, onRemove, onClick }: PropertyCardProps) {
         </View>
         <Text style={styles.propertyPrice}>
           ₹{property.price.toLocaleString('en-IN')}
-          <Text style={styles.propertyPriceNight}>/night</Text>
+          <Text style={styles.propertyPriceNight}>{t('listing.night_short')}</Text>
         </Text>
       </View>
     </TouchableOpacity>
@@ -154,6 +205,7 @@ function PropertyCard({ property, onRemove, onClick }: PropertyCardProps) {
 
 // --- Main Wishlist Page ---
 export default function WishlistPage() {
+  const { t, i18n } = useTranslation();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [wishlists, setWishlists] = useState<Wishlist[]>([]);
@@ -168,94 +220,190 @@ export default function WishlistPage() {
   // --- Load Data on Focus ---
   useFocusEffect(
     useCallback(() => {
-      const loadData = async () => {
-        let loadedWishlists = await getData(WISHLISTS_KEY, []);
-        let loadedProperties = await getData(SAVED_PROPERTIES_KEY, []);
-        const wishlistsExist = await AsyncStorage.getItem(WISHLISTS_KEY);
-        const propertiesExist = await AsyncStorage.getItem(SAVED_PROPERTIES_KEY);
+      let alive = true;
 
-        if (!wishlistsExist && !propertiesExist) {
-          console.log("First run: Seeding with initial data.");
-          loadedWishlists = initialWishlists;
-          loadedProperties = initialSavedProperties;
-          await storeData(WISHLISTS_KEY, loadedWishlists);
-          await storeData(SAVED_PROPERTIES_KEY, loadedProperties);
+      const load = async () => {
+        try {
+          // 1) load all wishlists
+          const res = await apiGet<{ wishlists: WishlistApiType[] }>(
+            '/v1/wishlists'
+          );
+
+          if (!alive) return;
+
+          setWishlists(res.wishlists.map(backendWishlistToUi));
+
+          // 2) if a list is selected, load its items
+          if (selectedList) {
+            const detail = await apiGet<{
+              wishlist: WishlistApiType;
+              items: {
+                id: number;
+                title: string;
+                location: string;
+                price: number;
+                rating: number;
+                image: string | null;
+                wishlist_item_id: number;
+              }[];
+            }>(`/v1/wishlists/${selectedList.id}`);
+
+            if (!alive) return;
+
+            setSavedProperties(
+              (detail.items ?? []).map((it) => ({
+                id: String(it.id),
+                name: it.title,
+                location: it.location,
+                price: Number(it.price ?? 0),
+                rating: Number(it.rating ?? 0),
+                image: it.image ?? '',
+                listId: String(selectedList.id),
+              }))
+            );
+          } else {
+            setSavedProperties([]);
+          }
+        } catch (err) {
+          console.error('[wishlist] load failed', err);
         }
-
-        loadedWishlists = loadedWishlists.map((list: Wishlist) => {
-          const propsInList = loadedProperties.filter((prop: SavedProperty) => prop.listId === list.id);
-          return {
-            ...list,
-            count: propsInList.length,
-            coverImage: list.coverImage || propsInList[0]?.image || undefined
-          };
-        });
-        setWishlists(loadedWishlists);
-        setSavedProperties(loadedProperties);
       };
-      loadData();
-    }, [])
+
+      load();
+      return () => {
+        alive = false;
+      };
+    }, [selectedList?.id, i18n.language])
   );
+
+
 
   // --- CRUD Operations ---
   const handleCreateList = async () => {
-    if (!newListName.trim()) { Alert.alert('Error', 'Please enter a list name'); return; }
-    const newList: Wishlist = {
-      id: Date.now().toString(), name: newListName.trim(),
-      description: newListDescription.trim(), count: 0
-    };
-    const updatedWishlists = [...wishlists, newList];
-    setWishlists(updatedWishlists);
-    await storeData(WISHLISTS_KEY, updatedWishlists);
-    resetAndCloseModals();
-    Alert.alert('Success', 'List created!');
+    if (!newListName.trim()) {
+      Alert.alert(t('common.error'), 'Please enter a list name');
+      return;
+    }
+
+    try {
+      const payload = {
+        name: newListName.trim(),
+        description: newListDescription.trim() || null,
+      };
+
+      const created = await apiPost<WishlistApiType>('/v1/wishlists', payload);
+      const newList = backendWishlistToUi(created);
+
+      setWishlists((prev) => [...prev, newList]);
+      resetAndCloseModals();
+      Alert.alert(t('common.success'), 'List created!');
+    } catch (err) {
+      console.error('[wishlist] create failed', err);
+      Alert.alert(t('common.error'), 'Could not create list. Please try again.');
+    }
   };
+
 
   const handleEditList = async () => {
-    if (!editingList || !newListName.trim()) { Alert.alert('Error', 'Please enter a list name'); return; }
-    const updatedWishlists = wishlists.map(list =>
-      list.id === editingList.id ? { ...list, name: newListName.trim(), description: newListDescription.trim() } : list
-    );
-    setWishlists(updatedWishlists);
-    await storeData(WISHLISTS_KEY, updatedWishlists);
-    if (selectedList?.id === editingList.id) { setSelectedList(updatedWishlists.find(l => l.id === editingList.id) || null); }
-    resetAndCloseModals();
-    Alert.alert('Success', 'List updated!');
+    if (!editingList || !newListName.trim()) {
+      Alert.alert(t('common.error'), 'Please enter a list name');
+      return;
+    }
+
+    try {
+      const payload = {
+        name: newListName.trim(),
+        description: newListDescription.trim() || null,
+      };
+
+      const updated = await apiPut<WishlistApiType>(
+        `/v1/wishlists/${editingList.id}`,
+        payload
+      );
+      const updatedUi = backendWishlistToUi(updated);
+
+      setWishlists((prev) =>
+        prev.map((list) =>
+          list.id === updatedUi.id ? { ...list, ...updatedUi } : list
+        )
+      );
+
+      if (selectedList?.id === updatedUi.id) {
+        setSelectedList((prev) => (prev ? { ...prev, ...updatedUi } : prev));
+      }
+
+      resetAndCloseModals();
+      Alert.alert(t('common.success'), 'List updated!');
+    } catch (err) {
+      console.error('[wishlist] update failed', err);
+      Alert.alert(t('common.error'), 'Could not update list. Please try again.');
+    }
   };
 
+
   const handleDeleteList = (listId: string) => {
-    Alert.alert('Delete List', 'Are you sure you want to delete this list and all its saved properties?', [
+    Alert.alert(t('mybookings.delete_list'),
+      'Are you sure you want to delete this list and all its saved properties?',
+      [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Delete', style: 'destructive',
+        {
+          text: 'Delete',
+          style: 'destructive',
           onPress: async () => {
-            const updatedWishlists = wishlists.filter(list => list.id !== listId);
-            const updatedProperties = savedProperties.filter(prop => prop.listId !== listId);
-            setWishlists(updatedWishlists);
-            setSavedProperties(updatedProperties);
-            await storeData(WISHLISTS_KEY, updatedWishlists);
-            await storeData(SAVED_PROPERTIES_KEY, updatedProperties);
-            setSelectedList(null);
-            Alert.alert('Success', 'List deleted.');
-          }
-        }
+            try {
+              await apiDelete(`/v1/wishlists/${listId}`);
+
+              setWishlists((prev) => prev.filter((l) => l.id !== listId));
+              setSavedProperties((prev) =>
+                prev.filter((p) => p.listId !== listId)
+              );
+              if (selectedList?.id === listId) setSelectedList(null);
+
+              Alert.alert(t('common.success'), 'List deleted.');
+            } catch (err) {
+              console.error('[wishlist] delete failed', err);
+              Alert.alert(t('common.error'), 'Could not delete list. Please try again.');
+            }
+          },
+        },
       ]
     );
   };
 
-  const handleRemoveProperty = async (propertyId: string) => {
-    if (!selectedList) return;
-    const updatedProperties = savedProperties.filter(prop => prop.id !== propertyId);
-    setSavedProperties(updatedProperties);
-    await storeData(SAVED_PROPERTIES_KEY, updatedProperties);
 
-    const updatedWishlists = wishlists.map(list =>
-      list.id === selectedList.id ? { ...list, count: list.count - 1 } : list
-    );
-    setWishlists(updatedWishlists);
-    await storeData(WISHLISTS_KEY, updatedWishlists);
-    setSelectedList(prev => prev ? { ...prev, count: prev.count - 1 } : null);
-    Alert.alert('Success', 'Removed from list.');
+  const handleRemoveProperty = async (listingId: string) => {
+    if (!selectedList) return;
+
+    try {
+      await apiDelete(
+        `/v1/wishlists/${selectedList.id}/items/${listingId}`
+      );
+
+      setSavedProperties((prev) =>
+        prev.filter(
+          (p) => !(p.listId === selectedList.id && p.id === listingId)
+        )
+      );
+
+      setWishlists((prev) =>
+        prev.map((list) =>
+          list.id === selectedList.id
+            ? { ...list, count: Math.max(0, list.count - 1) }
+            : list
+        )
+      );
+
+      setSelectedList((prev) =>
+        prev ? { ...prev, count: Math.max(0, prev.count - 1) } : prev
+      );
+
+      Alert.alert(t('common.success'), 'Removed from list.');
+    } catch (err) {
+      console.error('[wishlist] remove item failed', err);
+      Alert.alert(t('common.error'), 'Could not remove this stay. Please try again.');
+    }
   };
+
 
   const openEditModal = (list: Wishlist) => {
     setEditingList(list); setNewListName(list.name); setNewListDescription(list.description); setShowEditModal(true);
@@ -282,7 +430,7 @@ export default function WishlistPage() {
         </View>
         {/* Property List */}
         {properties.length === 0 ? (
-          <View style={styles.emptyContainer}><Heart size={64} color="#E5E7EB" /><Text style={styles.emptyTitle}>No saved properties</Text><Text style={styles.emptySubtitle}>Start adding properties to this list</Text><TouchableOpacity style={styles.browseButton} onPress={() => router.push('/(tabs)')}><Text style={styles.browseButtonText}>Browse stays</Text></TouchableOpacity></View>
+          <View style={styles.emptyContainer}><Heart size={64} color="#E5E7EB" /><Text style={styles.emptyTitle}>{t('wishlist.no_saved_properties')}</Text><Text style={styles.emptySubtitle}>{t('wishlist.start_saving_properties')}</Text><TouchableOpacity style={styles.browseButton} onPress={() => router.push('/(tabs)')}><Text style={styles.browseButtonText}>Browse stays</Text></TouchableOpacity></View>
         ) : (
           <FlatList
             data={properties}
@@ -292,7 +440,7 @@ export default function WishlistPage() {
                 property={item}
                 onRemove={() => handleRemoveProperty(item.id)}
                 // Navigate to listing details - adjust params as needed
-                onClick={() => router.push({ pathname: '/listing-details', params: { listingId: item.id } })}
+                onClick={() => router.push({ pathname: '/listing/[id]', params: { id: item.id }, })}
               />
             )}
             contentContainerStyle={styles.listContent}
@@ -301,7 +449,7 @@ export default function WishlistPage() {
         )}
          {/* Edit Modal */}
         <Modal visible={showEditModal} transparent animationType="fade" onRequestClose={resetAndCloseModals}>
-             <View style={styles.modalOverlay}><View style={styles.modalContent}><Text style={styles.modalTitle}>Edit List</Text><TextInput style={styles.input} placeholder="List name" value={newListName} onChangeText={setNewListName} /><TextInput style={styles.input} placeholder="Description (optional)" value={newListDescription} onChangeText={setNewListDescription} /><View style={styles.modalActions}><TouchableOpacity style={styles.modalButtonSecondary} onPress={resetAndCloseModals}><Text style={styles.modalButtonTextSecondary}>Cancel</Text></TouchableOpacity><TouchableOpacity style={styles.modalButtonPrimary} onPress={handleEditList}><Text style={styles.modalButtonTextPrimary}>Save Changes</Text></TouchableOpacity></View></View></View>
+             <View style={styles.modalOverlay}><View style={styles.modalContent}><Text style={styles.modalTitle}>{t('wishlist.edit_list')}</Text><TextInput style={styles.input} placeholder="List name" value={newListName} onChangeText={setNewListName} /><TextInput style={styles.input} placeholder={t('listing.description_optional')} value={newListDescription} onChangeText={setNewListDescription} /><View style={styles.modalActions}><TouchableOpacity style={styles.modalButtonSecondary} onPress={resetAndCloseModals}><Text style={styles.modalButtonTextSecondary}>{t('common.cancel')}</Text></TouchableOpacity><TouchableOpacity style={styles.modalButtonPrimary} onPress={handleEditList}><Text style={styles.modalButtonTextPrimary}>{t('host.edit_listing.save_changes')}</Text></TouchableOpacity></View></View></View>
         </Modal>
       </SafeAreaView>
     );
@@ -310,21 +458,21 @@ export default function WishlistPage() {
   // Main Wishlist View
   return (
     <SafeAreaView style={styles.container}>
-      <Stack.Screen options={{ title: 'Wishlists', headerLargeTitle: true }} />
+      <Stack.Screen options={{ title: t('wishlist.my_wishlists'), headerLargeTitle: true }} />
       <ScrollView contentContainerStyle={styles.listContent}>
         {/* Create Card */}
-        <TouchableOpacity style={[styles.cardContainer, styles.createCard]} onPress={() => setShowCreateModal(true)}><View style={styles.createIconContainer}><Plus size={24} color="#111827" /></View><Text style={styles.createTitle}>Create new list</Text><Text style={styles.createSubtitle}>Organize your saved properties</Text></TouchableOpacity>
+        <TouchableOpacity style={[styles.cardContainer, styles.createCard]} onPress={() => setShowCreateModal(true)}><View style={styles.createIconContainer}><Plus size={24} color="#111827" /></View><Text style={styles.createTitle}>{t('wishlist.create_new_wishlist')}</Text><Text style={styles.createSubtitle}>{t('wishlist.organize_your_saved_properties')}</Text></TouchableOpacity>
         {/* Existing Lists */}
         {wishlists.map((list) => ( <WishlistCard key={list.id} wishlist={list} onClick={() => setSelectedList(list)} onEdit={() => openEditModal(list)} onDelete={() => handleDeleteList(list.id)} /> ))}
-        {wishlists.length === 0 && ( <View style={styles.emptyContainerLarge}><FolderPlus size={64} color="#E5E7EB" /><Text style={styles.emptyTitle}>No lists yet</Text><Text style={styles.emptySubtitle}>Create lists to organize saved properties</Text></View> )}
+        {wishlists.length === 0 && ( <View style={styles.emptyContainerLarge}><FolderPlus size={64} color="#E5E7EB" /><Text style={styles.emptyTitle}>{t('wishlist.no_wishlists')}</Text><Text style={styles.emptySubtitle}>{t('wishlist.create_your_first_wishlist')}</Text></View> )}
       </ScrollView>
       {/* Create Modal */}
       <Modal visible={showCreateModal} transparent animationType="fade" onRequestClose={resetAndCloseModals}>
-          <View style={styles.modalOverlay}><View style={styles.modalContent}><Text style={styles.modalTitle}>Create New List</Text><TextInput style={styles.input} placeholder="List name (e.g., Weekend Getaways)" value={newListName} onChangeText={setNewListName} maxLength={50}/><TextInput style={styles.input} placeholder="Description (optional)" value={newListDescription} onChangeText={setNewListDescription} maxLength={100}/><View style={styles.modalActions}><TouchableOpacity style={styles.modalButtonSecondary} onPress={resetAndCloseModals}><Text style={styles.modalButtonTextSecondary}>Cancel</Text></TouchableOpacity><TouchableOpacity style={styles.modalButtonPrimary} onPress={handleCreateList}><Text style={styles.modalButtonTextPrimary}>Create</Text></TouchableOpacity></View></View></View>
+          <View style={styles.modalOverlay}><View style={styles.modalContent}><Text style={styles.modalTitle}>{t('wishlist.create_new_wishlist')}</Text><TextInput style={styles.input} placeholder={t('listing.list_name_placeholder')} value={newListName} onChangeText={setNewListName} maxLength={50}/><TextInput style={styles.input} placeholder={t('listing.description_optional')} value={newListDescription} onChangeText={setNewListDescription} maxLength={100}/><View style={styles.modalActions}><TouchableOpacity style={styles.modalButtonSecondary} onPress={resetAndCloseModals}><Text style={styles.modalButtonTextSecondary}>{t('common.cancel')}</Text></TouchableOpacity><TouchableOpacity style={styles.modalButtonPrimary} onPress={handleCreateList}><Text style={styles.modalButtonTextPrimary}>{t('wishlist.create')}</Text></TouchableOpacity></View></View></View>
       </Modal>
         {/* Edit Modal */}
         <Modal visible={showEditModal} transparent animationType="fade" onRequestClose={resetAndCloseModals}>
-            <View style={styles.modalOverlay}><View style={styles.modalContent}><Text style={styles.modalTitle}>Edit List</Text><TextInput style={styles.input} placeholder="List name" value={newListName} onChangeText={setNewListName} maxLength={50}/><TextInput style={styles.input} placeholder="Description (optional)" value={newListDescription} onChangeText={setNewListDescription} maxLength={100}/><View style={styles.modalActions}><TouchableOpacity style={styles.modalButtonSecondary} onPress={resetAndCloseModals}><Text style={styles.modalButtonTextSecondary}>Cancel</Text></TouchableOpacity><TouchableOpacity style={styles.modalButtonPrimary} onPress={handleEditList}><Text style={styles.modalButtonTextPrimary}>Save Changes</Text></TouchableOpacity></View></View></View>
+            <View style={styles.modalOverlay}><View style={styles.modalContent}><Text style={styles.modalTitle}>{t('wishlist.edit_list')}</Text><TextInput style={styles.input} placeholder="List name" value={newListName} onChangeText={setNewListName} maxLength={50}/><TextInput style={styles.input} placeholder={t('listing.description_optional')} value={newListDescription} onChangeText={setNewListDescription} maxLength={100}/><View style={styles.modalActions}><TouchableOpacity style={styles.modalButtonSecondary} onPress={resetAndCloseModals}><Text style={styles.modalButtonTextSecondary}>{t('common.cancel')}</Text></TouchableOpacity><TouchableOpacity style={styles.modalButtonPrimary} onPress={() => handleEditList()}><Text style={{ color: '#FFFFFF', fontWeight: 'bold' }}>{t('host.edit_listing.save_changes')}</Text></TouchableOpacity></View></View></View>
         </Modal>
     </SafeAreaView>
   );
@@ -338,7 +486,11 @@ const styles = StyleSheet.create({
       flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12,
       backgroundColor: 'white', borderBottomWidth: 1, borderBottomColor: '#E5E7EB',
   },
-   backButton: { marginRight: 12 },
+   backButton: {
+    padding: 8,
+    borderRadius: 999,
+    marginRight: 8,
+  },
    headerTitleContainer: { flex: 1 },
    headerTitle: { fontSize: 18, fontWeight: 'bold' },
    headerSubtitle: { fontSize: 14, color: '#6B7280' },

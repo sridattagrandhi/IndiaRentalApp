@@ -1,9 +1,18 @@
 // app/(tabs)/index.tsx
-import { ThemedView } from '@/components/themed-view';
-import Constants from 'expo-constants';
-import { Image } from 'expo-image';
-import { List, LocateFixed, Map, MapPin, Navigation, Search, Star } from 'lucide-react-native'; // ⬅️ added LocateFixed
-import React, { useEffect, useRef, useState } from 'react';
+// app/(tabs)/index.tsx
+import { ThemedView } from "@/components/themed-view";
+import Constants from "expo-constants";
+import { Image } from "expo-image";
+import {
+  List,
+  LocateFixed,
+  Map,
+  MapPin,
+  Navigation,
+  Search,
+  Star,
+} from "lucide-react-native";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
   FlatList,
@@ -13,315 +22,497 @@ import {
   Text,
   TouchableOpacity,
   View,
-} from 'react-native';
+} from "react-native";
 
-import * as Location from 'expo-location';
-import { useRouter } from 'expo-router'; // Import useRouter
-import MapView, { Marker, PROVIDER_DEFAULT, Region, UrlTile } from 'react-native-maps';
+import * as Location from "expo-location";
+import { useRouter } from "expo-router";
+import { useTranslation } from "react-i18next";
+import MapView, {
+  Marker,
+  PROVIDER_DEFAULT,
+  Region,
+  UrlTile,
+} from "react-native-maps";
 
-// --- API Key and URLs ---
+// API client
+import { apiGet } from "@/services/api";
+
+// --- Map tiles
 const GEOAPIFY_API_KEY = Constants.expoConfig?.extra?.GEOAPIFY_API_KEY;
-
-if (!GEOAPIFY_API_KEY) {
-  console.error("Geoapify API key is missing! Check .env and app.config.js");
-  Alert.alert("Configuration Error", "Map API key is missing. Map functionality may be limited.");
-}
-
 const GEOAPIFY_TILE_URL = `https://maps.geoapify.com/v1/tile/osm-bright/{z}/{x}/{y}.png?apiKey=${GEOAPIFY_API_KEY}`;
 
-// --- Data Interfaces ---
-interface Property {
+type Property = {
   id: string;
+  listingId: number;
   name: string;
-  location: string;
+  location: string; // full address if available
   price: number;
   rating: number;
   distance: string;
   image: string;
   features: string[];
-  coordinates: [number, number]; // [lng, lat]
+  coordinates: { latitude: number; longitude: number };
+};
+
+type ListResponse = {
+  results: any[];
+  next_cursor?: number | null;
+  chips?: string[];
+  popular?: string[];
+};
+
+// Prefer full address → street + city → city → fallback text
+const locationFrom = (it: any) => {
+  const full = it.full_address || it.address || it.formatted_address;
+  const street = it.street || it.street_name || it.road;
+  const city = it.city || it.locality || it.town;
+  if (full) return String(full);
+  if (street && city) return `${street}, ${city}`;
+  if (city) return String(city);
+  return "Near you";
+};
+
+// Normalize coordinates from tuple/object
+const coordsFrom = (it: any) => {
+  let latitude = 37.7749;
+  let longitude = -122.4194;
+  if (Array.isArray(it.coordinates) && it.coordinates.length === 2) {
+    longitude = Number(it.coordinates[0]);
+    latitude = Number(it.coordinates[1]);
+  } else if (it.coordinates && typeof it.coordinates === "object") {
+    latitude = Number(it.coordinates.latitude ?? latitude);
+    longitude = Number(it.coordinates.longitude ?? longitude);
+  } else if (it.lat && it.lon) {
+    latitude = Number(it.lat);
+    longitude = Number(it.lon);
+  }
+  return { latitude, longitude };
+};
+
+function mapToProperty(it: any): Property {
+  const km =
+    typeof it.distance === "number"
+      ? `${(it.distance / 1000).toFixed(1)} km`
+      : (it.distance ?? "");
+
+  return {
+    id: String(it.id),
+    listingId: Number(it.id),
+    name: it.title ?? it.name ?? "Stay",
+    location: locationFrom(it),
+    price: Number(it.price ?? 0),
+    rating: Number(it.rating ?? 4.7),
+    distance: km,
+    image:
+      it.photo_url ?? it.image ?? "https://picsum.photos/seed/stay/400/400",
+    features: Array.isArray(it.amenities) ? it.amenities : (it.features ?? []),
+    coordinates: coordsFrom(it),
+  };
 }
 
-// --- MODIFIED: Mock Data (San Francisco) ---
-const mockProperties: Property[] = [
-  {
-    id: '1',
-    name: 'Cozy Apartment in Mission',
-    location: 'Mission District, SF',
-    price: 3200,
-    rating: 4.8,
-    distance: '1.2 km',
-    image: 'https://images.unsplash.com/photo-1560448204-e02f11c3d0e2?w=400&h=400&fit=crop',
-    features: ['Parking', 'WiFi', 'AC'],
-    coordinates: [-122.4194, 37.7749],
-  },
-  {
-    id: '2',
-    name: 'Spacious Villa in Pac Heights',
-    location: 'Pacific Heights, SF',
-    price: 5500,
-    rating: 4.9,
-    distance: '3.1 km',
-    image: 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?w=400&h=400&fit=crop',
-    features: ['Pool', 'Parking'],
-    coordinates: [-122.4421, 37.7925],
-  },
-  {
-    id: '3',
-    name: 'Budget Stay Near Golden Gate',
-    location: 'Richmond District, SF',
-    price: 1800,
-    rating: 4.5,
-    distance: '4.2 km',
-    image: 'https://images.unsplash.com/photo-1566073771259-6a8506099945?w=400&h=400&fit=crop',
-    features: ['WiFi', 'Breakfast'],
-    coordinates: [-122.4731, 37.7801],
-  },
-];
+type AvailabilityDay = {
+  date: string; // 'YYYY-MM-DD'
+  status: "available" | "blocked" | "booked";
+  price: number;
+};
 
-const quickFilters = ['Tonight', 'Weekend', '₹ Budget', 'Family', 'Parking'];
-const popularAreas = ['San Francisco', 'Oakland', 'San Jose', 'Napa', 'Sacramento'];
+async function fetchEffectivePriceFromCalendar(
+  listingId: number,
+  fallbackPrice: number,
+): Promise<number> {
+  const today = new Date();
+  const end = new Date();
+  end.setDate(today.getDate() + 30); // look at ~next month
 
-// --- Zillow/Airbnb-style price marker ---
+  try {
+    const res = await apiGet<{ results: AvailabilityDay[] }>(
+      `/v1/listings/${listingId}/availability`,
+      {
+        params: {
+          start_date: today.toISOString().slice(0, 10),
+          end_date: end.toISOString().slice(0, 10),
+        },
+      },
+    );
+
+    const days = res.results ?? [];
+    const availablePrices = days
+      .filter((d) => d.status === "available" && typeof d.price === "number")
+      .map((d) => d.price);
+
+    if (!availablePrices.length) return fallbackPrice;
+
+    return Math.min(...availablePrices); // e.g. “from ₹X”
+  } catch (e) {
+    console.error("calendar pricing error", e);
+    return fallbackPrice;
+  }
+}
+
 const MarkerTag = ({ price }: { price: number }) => (
   <View style={styles.priceTagWrap}>
     <View style={styles.priceTag}>
-      <Text style={styles.priceTagText}>₹{Math.round(price / 1000)}k</Text>
+      <Text style={styles.priceTagText}>
+        ₹{Math.round(price).toLocaleString("en-IN")}
+      </Text>
     </View>
     <View style={styles.priceTagTail} />
   </View>
 );
 
-// --- Property Card ---
-const PropertyCard = ({ property }: { property: Property }) => (
-  <TouchableOpacity style={styles.card}>
-    <View style={styles.cardContent}>
-      <Image
-        source={{ uri: property.image }}
-        style={styles.cardImage}
-        placeholder={{ blurhash: 'L0A,l#~q00D%~qD%00%M00?b-;%M' }}
-        transition={300}
-      />
-      <View style={styles.cardDetails}>
-        <View style={styles.cardRow}>
-          <Text style={styles.cardName} numberOfLines={1}>{property.name}</Text>
-          <View style={styles.cardRating}>
-            <Star size={12} color="#F59E0B" fill="#F59E0B" />
-            <Text style={styles.cardRatingText}>{property.rating}</Text>
+const PropertyCard = ({ property }: { property: Property }) => {
+  const router = useRouter();
+  const { t } = useTranslation();
+  const go = (id: string) =>
+    router.push({ pathname: "./listing/[id]", params: { id } });
+  return (
+    <TouchableOpacity
+      style={styles.card}
+      activeOpacity={0.9}
+      onPress={() => go(property.id)}
+    >
+      <View style={styles.cardContent}>
+        <Image
+          source={{ uri: property.image }}
+          style={styles.cardImage}
+          placeholder={{ blurhash: "L0A,l#~q00D%~qD%00%M00?b-;%M" }}
+          transition={300}
+        />
+        <View style={styles.cardDetails}>
+          <View style={styles.cardRow}>
+            <Text style={styles.cardName} numberOfLines={1}>
+              {property.name}
+            </Text>
+            <View style={styles.cardRating}>
+              <Star size={12} color="#F59E0B" fill="#F59E0B" />
+              <Text style={styles.cardRatingText}>
+                {property.rating.toFixed(1)}
+              </Text>
+            </View>
+          </View>
+          <View style={styles.cardRow}>
+            <MapPin size={12} color="#6B7280" />
+            <Text style={styles.cardLocation} numberOfLines={1}>
+              {property.location}
+              {property.distance ? ` • ${property.distance}` : ""}
+            </Text>
+          </View>
+          <View style={styles.cardFeatures}>
+            {(property.features ?? []).slice(0, 3).map((feature) => (
+              <View key={feature} style={styles.cardFeatureTag}>
+                <Text style={styles.cardFeatureText}>{feature}</Text>
+              </View>
+            ))}
+          </View>
+          <View style={styles.cardRow}>
+            <Text style={styles.cardPrice}>
+              ₹{property.price.toLocaleString("en-IN")}
+              <Text style={styles.cardPriceNight}>
+                {t("listing.night_short")}
+              </Text>
+            </Text>
+            <TouchableOpacity
+              style={styles.cardViewButton}
+              onPress={(e) => {
+                e.stopPropagation();
+                go(property.id);
+              }}
+            >
+              <Text style={styles.cardViewButtonText}>{t("listing.view")}</Text>
+            </TouchableOpacity>
           </View>
         </View>
-        <View style={styles.cardRow}>
-          <MapPin size={12} color="#6B7280" />
-          <Text style={styles.cardLocation} numberOfLines={1}>
-            {property.location} • {property.distance}
-          </Text>
-        </View>
-        <View style={styles.cardFeatures}>
-          {property.features.map((feature) => (
-            <View key={feature} style={styles.cardFeatureTag}>
-              <Text style={styles.cardFeatureText}>{feature}</Text>
-            </View>
-          ))}
-        </View>
-        <View style={styles.cardRow}>
-          <Text style={styles.cardPrice}>₹{property.price}<Text style={styles.cardPriceNight}>/night</Text></Text>
-          <TouchableOpacity style={styles.cardViewButton}>
-            <Text style={styles.cardViewButtonText}>View</Text>
-          </TouchableOpacity>
-        </View>
       </View>
-    </View>
-  </TouchableOpacity>
-);
+    </TouchableOpacity>
+  );
+};
 
-// --- Main ---
 export default function HomePage() {
-  const router = useRouter(); // Get the router
-  const [viewMode, setViewMode] = useState<'map' | 'list'>('list');
-  const [selectedFilters, setSelectedFilters] = useState<string[]>([]);
-  const mapViewRef = useRef<MapView>(null);
-  const [initialRegion, setInitialRegion] = useState<Region | undefined>(undefined);
-  const [currentRegion, setCurrentRegion] = useState<Region | undefined>(undefined);
-  const [showFindNearMe, setShowFindNearMe] = useState(true);
-  const [areaLabel, setAreaLabel] = useState<string>('your area');
+  const router = useRouter();
+  const { t, i18n } = useTranslation();
+  const [viewMode, setViewMode] = useState<"map" | "list">("list");
 
-  // On mount: set region
+  // backend state
+  const [chips, setChips] = useState<string[]>([]);
+  const [popularAreas, setPopularAreas] = useState<string[]>([]);
+  const [properties, setProperties] = useState<Property[]>([]);
+  const [nextCursor, setNextCursor] = useState<number | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  // map state
+  const mapViewRef = useRef<MapView>(null);
+  const [initialRegion, setInitialRegion] = useState<Region | undefined>(
+    undefined,
+  );
+  const [currentRegion, setCurrentRegion] = useState<Region | undefined>(
+    undefined,
+  );
+  const [showFindNearMe, setShowFindNearMe] = useState(true);
+
   useEffect(() => {
     const getLocationAndSetRegion = async () => {
+      const fallback: Region = {
+        latitude: 12.9716,
+        longitude: 77.5946,
+        latitudeDelta: 0.3,
+        longitudeDelta: 0.3,
+      };
       let { status } = await Location.requestForegroundPermissionsAsync();
-      let fallback: Region = { latitude: 37.7749, longitude: -122.4194, latitudeDelta: 0.1, longitudeDelta: 0.1 }; // Default to SF
-      if (status !== 'granted') { setInitialRegion(fallback); setCurrentRegion(fallback); return; }
+      if (status !== "granted") {
+        setInitialRegion(fallback);
+        setCurrentRegion(fallback);
+        await loadHome();
+        return;
+      }
       try {
         let loc = await Location.getCurrentPositionAsync({});
-        const region = { latitude: loc.coords.latitude, longitude: loc.coords.longitude, latitudeDelta: 0.05, longitudeDelta: 0.05 };
+        const region = {
+          latitude: loc.coords.latitude,
+          longitude: loc.coords.longitude,
+          latitudeDelta: 0.1,
+          longitudeDelta: 0.1,
+        };
         setInitialRegion(region);
         setCurrentRegion(region);
       } catch {
         setInitialRegion(fallback);
         setCurrentRegion(fallback);
+      } finally {
+        await loadHome();
       }
     };
     getLocationAndSetRegion();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Reverse geocode center for “Listings in …”
-  const fetchAreaLabel = async (lat: number, lon: number) => {
+  const loadHome = useCallback(async () => {
+    if (loading) return;
+    setLoading(true);
+
     try {
-      if (!GEOAPIFY_API_KEY) return;
-      const resp = await fetch(`https://api.geoapify.com/v1/geocode/reverse?lat=${lat}&lon=${lon}&apiKey=${GEOAPIFY_API_KEY}`);
-      const j = await resp.json();
-      const p = j?.features?.[0]?.properties;
-      const name = p?.city || p?.town || p?.village || p?.county || p?.state || p?.country || 'this area';
-      setAreaLabel(name);
-    } catch {}
-  };
+      const data = await apiGet<ListResponse>("/v1/listings");
 
-  useEffect(() => {
-    const r = currentRegion ?? initialRegion;
-    if (r) fetchAreaLabel(r.latitude, r.longitude);
-  }, [currentRegion, initialRegion]);
+      const raw = data.results ?? [];
+      const mapped: Property[] = raw.map(mapToProperty);
 
-  const toggleFilter = (f: string) =>
-    setSelectedFilters(prev => prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f]);
+      // Pull prices from calendar for each listing
+      const withDynamicPrices = await Promise.all(
+        mapped.map(async (p) => ({
+          ...p,
+          price: await fetchEffectivePriceFromCalendar(p.listingId, p.price),
+        })),
+      );
 
-  // --- MODIFIED: "Find stays near me" handler ---
+      setChips(data.chips ?? []);
+      setPopularAreas(data.popular ?? []);
+      setProperties(withDynamicPrices);
+      setNextCursor(data.next_cursor ?? null);
+    } catch (e: any) {
+      console.error(e);
+      Alert.alert("Load error", e?.message ?? "Failed to load home.");
+    } finally {
+      setLoading(false);
+    }
+  }, [loading]);
+
+  const loadMore = useCallback(async () => {
+    if (!nextCursor || loadingMore) return;
+    setLoadingMore(true);
+
+    try {
+      const data = await apiGet<ListResponse>("/v1/listings", {
+        params: { cursor: nextCursor },
+      });
+
+      const raw = data.results ?? [];
+      const mapped: Property[] = raw.map(mapToProperty);
+
+      const withDynamicPrices = await Promise.all(
+        mapped.map(async (p) => ({
+          ...p,
+          price: await fetchEffectivePriceFromCalendar(p.listingId, p.price),
+        })),
+      );
+
+      setProperties((prev) => [...prev, ...withDynamicPrices]);
+      setNextCursor(data.next_cursor ?? null);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [nextCursor, loadingMore]);
+
+  const handleNavigateToSearch = () => router.push("/search");
+
   const handleFindStaysNearMe = async () => {
-    let { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== 'granted') { Alert.alert('Permission denied', 'Enable location services to find stays near you.'); return; }
-    
+    const { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== "granted") {
+      Alert.alert(
+        t("search.permission_denied"),
+        "Enable location services to find stays near you.",
+      );
+      return;
+    }
+
     try {
-      let loc = await Location.getCurrentPositionAsync({});
-      // Navigate to search page with current location
+      const loc = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+
       router.push({
-        pathname: '/search',
-        params: { lat: loc.coords.latitude, lon: loc.coords.longitude }
+        pathname: "/search",
+        params: {
+          near_me: "1",
+          lat: String(loc.coords.latitude),
+          lon: String(loc.coords.longitude),
+        },
       });
     } catch {
-      Alert.alert("Location Error", "Could not fetch your current location. Defaulting to search.");
-      router.push('/search'); // Go to search anyway
+      Alert.alert("Location Error", "Could not fetch your location.");
+      router.push("/search");
     }
   };
 
-  // --- MODIFIED: Search bar navigation ---
-  const handleNavigateToSearch = () => {
-    // Navigate to search page without location params
-    router.push('/search');
-  };
-
-  // ⬇️ NEW: recenter-to-user for the home map
   const recenterToUser = async () => {
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Location Permission', 'Permission to access location was denied');
+      if (status !== "granted") {
+        Alert.alert(
+          "Location Permission",
+          "Permission to access location was denied",
+        );
         return;
       }
-      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      const center = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
-      // Update state for label/logic
-      const newRegion: Region = { ...center, latitudeDelta: 0.02, longitudeDelta: 0.02 };
+      const pos = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+      const center = {
+        latitude: pos.coords.latitude,
+        longitude: pos.coords.longitude,
+      };
+      const newRegion: Region = {
+        ...center,
+        latitudeDelta: 0.02,
+        longitudeDelta: 0.02,
+      };
       setCurrentRegion(newRegion);
-
-      // Smooth camera move
-      mapViewRef.current?.animateCamera?.({ center, zoom: 15 }, { duration: 350 });
+      mapViewRef.current?.animateCamera?.(
+        { center, zoom: 15 },
+        { duration: 350 },
+      );
     } catch (e) {
       console.error(e);
-      Alert.alert('Location Error', 'Could not get your current location.');
+      Alert.alert("Location Error", "Could not get your current location.");
     }
   };
-  // ⬆️
 
   if (!initialRegion) {
-    return (<View style={styles.loadingContainer}><Text>Finding your location...</Text></View>);
+    return (
+      <View style={styles.loadingContainer}>
+        <Text>Finding your location...</Text>
+      </View>
+    );
   }
 
   return (
-    <ThemedView style={styles.container}>
+    <ThemedView key={i18n.language} style={styles.container}>
       <SafeAreaView style={styles.safeArea}>
         {/* Header */}
         <View style={styles.header}>
-          {/* Search Bar (Modified to be a button) */}
           <View style={styles.searchContainer}>
             <TouchableOpacity
               style={styles.searchInput}
-              onPress={handleNavigateToSearch} // Navigate on press
+              onPress={handleNavigateToSearch}
               activeOpacity={0.8}
             >
               <Text style={styles.searchInputPlaceholder}>
-                Search city, landmark, or route (e.g., Mumbai → Pune)
+                {t("search.where_to")}
               </Text>
             </TouchableOpacity>
-            
             <View style={styles.searchIconWrap} pointerEvents="none">
               <Search size={18} color="#9AA0A6" />
             </View>
           </View>
 
-          {/* Quick Filters */}
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filtersContainer}>
-            {quickFilters.map((f) => (
-              <TouchableOpacity
-                key={f}
-                style={[styles.filterButton, selectedFilters.includes(f) && styles.filterButtonSelected]}
-                onPress={() => toggleFilter(f)}
-              >
-                <Text style={selectedFilters.includes(f) ? styles.filterTextSelected : styles.filterText}>
-                  {f}
-                </Text>
-              </TouchableOpacity>
+          {/* Quick filters from backend (if provided) */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.filtersContainer}
+          >
+            {chips.map((f) => (
+              <View key={f} style={styles.filterButton}>
+                <Text style={styles.filterText}>{f}</Text>
+              </View>
             ))}
           </ScrollView>
         </View>
 
         {/* Content */}
         <View style={styles.contentContainer}>
-          {viewMode === 'map' ? (
-            <>
-              <MapView
-                ref={mapViewRef}
-                style={styles.map}
-                provider={PROVIDER_DEFAULT}
-                initialRegion={initialRegion}
-                onRegionChangeComplete={setCurrentRegion}
-                mapType="none"
-                showsUserLocation={true}
-              >
-                {GEOAPIFY_API_KEY && (
-                  <UrlTile urlTemplate={GEOAPIFY_TILE_URL} maximumZ={20} flipY={false} zIndex={-1} />
-                )}
-
-                {mockProperties.map((p) => (
-                  <Marker
-                    key={p.id}
-                    coordinate={{ latitude: p.coordinates[1], longitude: p.coordinates[0] }}
-                    onPress={() => Alert.alert('Stay Selected', p.name)}
-                    anchor={{ x: 0.5, y: 1 }}
-                  >
-                    <MarkerTag price={p.price} />
-                  </Marker>
-                ))}
-              </MapView>
-            </>
+          {viewMode === "map" ? (
+            <MapView
+              ref={mapViewRef}
+              style={styles.map}
+              provider={PROVIDER_DEFAULT}
+              initialRegion={initialRegion}
+              onRegionChangeComplete={(r) => setCurrentRegion(r)}
+              mapType="none"
+              showsUserLocation={true}
+            >
+              {!!GEOAPIFY_API_KEY && (
+                <UrlTile
+                  urlTemplate={GEOAPIFY_TILE_URL}
+                  maximumZ={20}
+                  flipY={false}
+                  zIndex={-1}
+                />
+              )}
+              {properties.map((p) => (
+                <Marker
+                  key={p.id}
+                  coordinate={p.coordinates}
+                  anchor={{ x: 0.5, y: 1 }}
+                >
+                  <MarkerTag price={p.price} />
+                </Marker>
+              ))}
+            </MapView>
           ) : (
             <FlatList<Property>
-              data={mockProperties}
+              data={properties}
               renderItem={({ item }) => <PropertyCard property={item} />}
               keyExtractor={(item) => item.id}
               contentContainerStyle={styles.listContent}
+              onEndReachedThreshold={0.3}
+              onEndReached={loadMore}
+              ListFooterComponent={
+                loadingMore ? (
+                  <Text style={{ textAlign: "center", paddingVertical: 8 }}>
+                    Loading…
+                  </Text>
+                ) : null
+              }
             />
           )}
 
-          {/* Toggle (top-right) */}
+          {/* Toggle */}
           <TouchableOpacity
             style={styles.viewToggleButton}
-            onPress={() => setViewMode(viewMode === 'map' ? 'list' : 'map')}
+            onPress={() => setViewMode(viewMode === "map" ? "list" : "map")}
             activeOpacity={0.8}
           >
-            {viewMode === 'map' ? <List size={20} color="white" /> : <Map size={20} color="white" />}
+            {viewMode === "map" ? (
+              <List size={20} color="white" />
+            ) : (
+              <Map size={20} color="white" />
+            )}
           </TouchableOpacity>
 
-          {/* ⬇️ NEW: Locate-me button directly under the toggle */}
-          {viewMode === 'map' && (
+          {/* Locate me on map */}
+          {viewMode === "map" && (
             <TouchableOpacity
               style={styles.locateButton}
               onPress={recenterToUser}
@@ -330,43 +521,57 @@ export default function HomePage() {
               <LocateFixed size={18} color="white" />
             </TouchableOpacity>
           )}
-          {/* ⬆️ */}
         </View>
       </SafeAreaView>
 
       {/* Footer */}
       <View style={styles.footer}>
         {showFindNearMe && (
-          <TouchableOpacity style={styles.findStaysButton} onPress={handleFindStaysNearMe}>
+          <TouchableOpacity
+            style={styles.findStaysButton}
+            onPress={handleFindStaysNearMe}
+          >
             <Navigation size={16} color="white" />
-            <Text style={styles.findStaysButtonText}>Find stays near me</Text>
+            <Text style={styles.findStaysButtonText}>
+              {t("index.find_stays_near_me")}
+            </Text>
           </TouchableOpacity>
         )}
         <View style={styles.footerRow}>
-          {/* --- MODIFICATION: Added onPress handler --- */}
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.footerButton}
-            onPress={() => router.push('/route')}
+            onPress={() => router.push("/route")}
           >
-            <Text style={styles.footerButtonText}>Plan a route →</Text>
+            <Text style={styles.footerButtonText}>
+              {t("route.plan_your_route")} →
+            </Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.footerButton}>
-            <Text style={styles.footerButtonText}>Explore popular areas</Text>
-          </TouchableOpacity>
+
+          {/* Popular areas from backend (if provided) */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.popularAreasContainer}
+          >
+            {popularAreas.map((area) => (
+              <TouchableOpacity
+                key={area}
+                style={styles.popularAreaButton}
+                onPress={() =>
+                  router.push({ pathname: "/search", params: { q: area } })
+                }
+              >
+                <Text style={styles.popularAreaText}>{area}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
         </View>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.popularAreasContainer}>
-          {popularAreas.map((area) => (
-            <TouchableOpacity key={area} style={styles.popularAreaButton}>
-              <Text style={styles.popularAreaText}>{area}</Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
       </View>
     </ThemedView>
   );
 }
 
-// --- Styles ---
+// ---- styles (your original styles; unchanged except for harmless comments) ----
 const INPUT_HEIGHT = 48;
 const ICON_SIZE = 18;
 const ICON_PAD = 8;
@@ -374,105 +579,105 @@ const WRAP_SIZE = ICON_SIZE + ICON_PAD;
 const ICON_LEFT = 16;
 
 const styles = StyleSheet.create({
-  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'white' },
-  container: { flex: 1, backgroundColor: 'white' },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "white",
+  },
+  container: { flex: 1, backgroundColor: "white" },
   safeArea: { flex: 1 },
-  contentContainer: { flex: 1, position: 'relative' },
+  contentContainer: { flex: 1, position: "relative" },
 
   header: {
-    backgroundColor: 'white',
+    backgroundColor: "white",
     paddingHorizontal: 16,
     paddingTop: 12,
     paddingBottom: 10,
     borderBottomWidth: 1,
-    borderBottomColor: '#EEEFF3',
+    borderBottomColor: "#EEEFF3",
     gap: 10,
   },
 
   // Search
-  searchContainer: { position: 'relative', justifyContent: 'center' },
+  searchContainer: { position: "relative", justifyContent: "center" },
   searchInput: {
-    width: '100%',
+    width: "100%",
     height: INPUT_HEIGHT,
     paddingLeft: ICON_LEFT + WRAP_SIZE + 10,
     paddingRight: 16,
     borderWidth: 1,
-    borderColor: '#E6E8EC',
+    borderColor: "#E6E8EC",
     borderRadius: 24,
-    backgroundColor: '#F6F7F9',
-    justifyContent: 'center', // Added for TouchableOpacity
+    backgroundColor: "#F6F7F9",
+    justifyContent: "center",
   },
-  searchInputPlaceholder: { fontSize: 16, color: '#9AA0A6' },
+  searchInputPlaceholder: { fontSize: 16, color: "#9AA0A6" },
   searchIconWrap: {
-    position: 'absolute',
+    position: "absolute",
     left: ICON_LEFT,
     top: INPUT_HEIGHT / 2,
     transform: [{ translateY: -(WRAP_SIZE / 2) }],
     width: WRAP_SIZE,
     height: WRAP_SIZE,
-    justifyContent: 'center',
-    alignItems: 'center',
+    justifyContent: "center",
+    alignItems: "center",
     zIndex: 3,
   },
 
-  // Quick filters
-  filtersContainer: { flexDirection: 'row', gap: 8, paddingVertical: 6 },
+  filtersContainer: { flexDirection: "row", gap: 8, paddingVertical: 6 },
   filterButton: {
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: '#E6E8EC',
-    backgroundColor: 'white',
+    borderColor: "#E6E8EC",
+    backgroundColor: "white",
   },
-  filterButtonSelected: { backgroundColor: '#111827', borderColor: '#111827' },
-  filterText: { fontSize: 14, color: '#374151' },
-  filterTextSelected: { fontSize: 14, color: 'white', fontWeight: '600' },
+  filterText: { fontSize: 14, color: "#374151" },
 
-  // Map
   map: { flex: 1 },
 
-  // Price tag marker
-  priceTagWrap: { alignItems: 'center' },
+  priceTagWrap: { alignItems: "center" },
   priceTag: {
-    backgroundColor: 'black',
+    backgroundColor: "black",
     paddingVertical: 6,
     paddingHorizontal: 10,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: 'black',
-    shadowColor: '#000',
+    borderColor: "black",
+    shadowColor: "#000",
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.25,
     shadowRadius: 2,
     elevation: 3,
   },
-  priceTagText: { color: 'white', fontSize: 13, fontWeight: '700' },
+  priceTagText: { color: "white", fontSize: 13, fontWeight: "700" },
   priceTagTail: {
     marginTop: -2,
     width: 10,
     height: 10,
-    backgroundColor: 'white',
+    backgroundColor: "white",
     borderLeftWidth: 1,
     borderBottomWidth: 1,
-    borderColor: '#E5E7EB',
-    transform: [{ rotate: '45deg' }],
+    borderColor: "#E5E7EB",
+    transform: [{ rotate: "45deg" }],
   },
 
   listContent: { padding: 16, gap: 16 },
 
   // Toggle (top-right)
   viewToggleButton: {
-    position: 'absolute',
+    position: "absolute",
     top: 20,
     right: 20,
     width: 48,
     height: 48,
-    backgroundColor: '#0E1320',
+    backgroundColor: "#0E1320",
     borderRadius: 24,
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
+    justifyContent: "center",
+    alignItems: "center",
+    shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.3,
     shadowRadius: 4,
@@ -480,18 +685,18 @@ const styles = StyleSheet.create({
     zIndex: 10,
   },
 
-  // NEW: Locate-me button (directly under the toggle)
+  // Locate-me button
   locateButton: {
-    position: 'absolute',
-    top: 20 + 48 + 12, // under the toggle (toggle top + toggle height + gap)
+    position: "absolute",
+    top: 20 + 48 + 12,
     right: 20,
     width: 44,
     height: 44,
-    backgroundColor: '#0E1320',
+    backgroundColor: "#0E1320",
     borderRadius: 22,
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
+    justifyContent: "center",
+    alignItems: "center",
+    shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.3,
     shadowRadius: 4,
@@ -499,53 +704,101 @@ const styles = StyleSheet.create({
     zIndex: 10,
   },
 
-  // “Listings in …” pill
-  locationBadge: {
-    position: 'absolute',
-    bottom: 20,
-    left: '50%',
-    transform: [{ translateX: -120 }],
-    paddingVertical: 10,
-    paddingHorizontal: 18,
-    backgroundColor: 'rgba(255,255,255,0.95)',
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    shadowColor: '#000',
+  card: {
+    backgroundColor: "white",
+    borderRadius: 16,
+    shadowColor: "#000",
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 2,
-    elevation: 3,
-    zIndex: 10,
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+    overflow: "hidden",
   },
-  locationBadgeText: { fontSize: 14, fontWeight: '600', color: '#111827' },
-
-  // Cards
-  card: { backgroundColor: 'white', borderRadius: 16, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4, elevation: 2, overflow: 'hidden' },
-  cardContent: { flexDirection: 'row', padding: 12, gap: 12 },
-  cardImage: { width: 96, height: 96, borderRadius: 12, backgroundColor: '#F3F4F6' },
-  cardDetails: { flex: 1, justifyContent: 'space-between' },
-  cardRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  cardName: { fontSize: 16, fontWeight: '600', color: '#111827', flex: 1, marginRight: 8 },
-  cardRating: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  cardRatingText: { fontSize: 14, fontWeight: '500' },
-  cardLocation: { fontSize: 14, color: '#4B5563', flex: 1 },
-  cardFeatures: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 4 },
-  cardFeatureTag: { backgroundColor: '#F3F4F6', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
-  cardFeatureText: { fontSize: 10, color: '#374151', fontWeight: '500' },
-  cardPrice: { fontSize: 16, fontWeight: 'bold', color: '#111827' },
-  cardPriceNight: { fontSize: 12, color: '#6B7080', fontWeight: 'normal' },
-  cardViewButton: { backgroundColor: '#0E1320', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8 },
-  cardViewButtonText: { color: 'white', fontSize: 14, fontWeight: '500' },
+  cardContent: { flexDirection: "row", padding: 12, gap: 12 },
+  cardImage: {
+    width: 96,
+    height: 96,
+    borderRadius: 12,
+    backgroundColor: "#F3F4F6",
+  },
+  cardDetails: { flex: 1, justifyContent: "space-between" },
+  cardRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  cardName: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#111827",
+    flex: 1,
+    marginRight: 8,
+  },
+  cardRating: { flexDirection: "row", alignItems: "center", gap: 4 },
+  cardRatingText: { fontSize: 14, fontWeight: "500" },
+  cardLocation: { fontSize: 14, color: "#4B5563", flex: 1 },
+  cardFeatures: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    marginTop: 4,
+  },
+  cardFeatureTag: {
+    backgroundColor: "#F3F4F6",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  cardFeatureText: { fontSize: 10, color: "#374151", fontWeight: "500" },
+  cardPrice: { fontSize: 16, fontWeight: "bold", color: "#111827" },
+  cardPriceNight: { fontSize: 12, color: "#6B7080", fontWeight: "normal" },
+  cardViewButton: {
+    backgroundColor: "#0E1320",
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  cardViewButtonText: { color: "white", fontSize: 14, fontWeight: "500" },
 
   // Footer
-  footer: { backgroundColor: 'white', padding: 16, paddingBottom: 24, borderTopWidth: 1, borderTopColor: '#E6E8EC', gap: 12 },
-  findStaysButton: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', backgroundColor: '#0E1320', padding: 14, borderRadius: 16, gap: 8 },
-  findStaysButtonText: { color: 'white', fontSize: 16, fontWeight: '600' },
-  footerRow: { flexDirection: 'row', gap: 12 },
-  footerButton: { flex: 1, borderWidth: 1, borderColor: '#E6E8EC', padding: 12, borderRadius: 14, alignItems: 'center' },
-  footerButtonText: { color: '#0E1320', fontWeight: '500' },
-  popularAreasContainer: { flexDirection: 'row', gap: 8, paddingTop: 4 },
-  popularAreaButton: { backgroundColor: '#F1F2F5', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999 },
-  popularAreaText: { fontSize: 14, color: '#374151' },
+  footer: {
+    backgroundColor: "white",
+    padding: 16,
+    paddingBottom: 24,
+    borderTopWidth: 1,
+    borderTopColor: "#E6E8EC",
+    gap: 12,
+  },
+  findStaysButton: {
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#0E1320",
+    padding: 14,
+    borderRadius: 16,
+    gap: 8,
+  },
+  findStaysButtonText: { color: "white", fontSize: 16, fontWeight: "600" },
+  footerRow: {
+    flexDirection: "column",
+    gap: 12,
+    alignItems: "stretch",
+  },
+  footerButton: {
+    width: "100%",
+    borderWidth: 1,
+    borderColor: "#E6E8EC",
+    padding: 14,
+    borderRadius: 16,
+    alignItems: "center",
+  },
+  footerButtonText: { color: "#0E1320", fontWeight: "500" },
+  popularAreasContainer: { flexDirection: "row", gap: 8, paddingTop: 4 },
+  popularAreaButton: {
+    backgroundColor: "#F1F2F5",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+  },
+  popularAreaText: { fontSize: 14, color: "#374151" },
 });

@@ -1,193 +1,445 @@
+import { useTranslation } from 'react-i18next';
 // app/settings/edit-profile.tsx
+import api from '@/services/api';
+import * as ImagePicker from 'expo-image-picker';
 import { Stack, useRouter } from 'expo-router';
-import { ArrowLeft, Camera, Mail, Phone } from 'lucide-react-native';
-import React, { useState } from 'react';
-import { Alert, Image, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Image,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 
-export default function EditProfilePage() {
-  const router = useRouter();
-  const [formData, setFormData] = useState({
-    firstName: 'Priya',
-    lastName: 'Sharma',
-    email: 'priya.sharma@example.com',
-    phone: '+91 98765 43210',
-    bio: 'Travel enthusiast exploring India one city at a time.',
-    avatar: 'https://i.pravatar.cc/150?img=9',
+/**
+ * Upload helper that supports BOTH:
+ * - Presigned PUT (single URL)
+ * - Presigned POST (url + fields)
+ */
+async function uploadWithPresign(
+  presignData: any,
+  localUri: string,
+  contentType: string
+) {
+  // ---- CASE A: Presigned POST ----
+  // Typical shape:
+  // { url: "https://bucket.s3.amazonaws.com", fields: { key, policy, x-amz-... }, public_url: "..." }
+  const postUrl: string | undefined = presignData.url || presignData.upload_url;
+  const fields: Record<string, string> | undefined = presignData.fields;
+
+  if (postUrl && fields && typeof fields === 'object') {
+    const form = new FormData();
+
+    // Must include ALL fields exactly as provided
+    Object.entries(fields).forEach(([k, v]) => {
+      form.append(k, v);
+    });
+
+    // React Native / Expo fetch supports { uri, name, type } file objects
+    form.append('file', {
+      uri: localUri,
+      name: `avatar.${contentType === 'image/png' ? 'png' : 'jpg'}`,
+      type: contentType,
+    } as any);
+
+    const resp = await fetch(postUrl, {
+      method: 'POST',
+      body: form,
+      // DO NOT set Content-Type manually; fetch will set multipart boundary
+    });
+
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      throw new Error(`S3 POST failed: ${resp.status} ${text}`);
+    }
+
+    return;
+  }
+
+  // ---- CASE B: Presigned PUT ----
+  // Typical shape:
+  // { presigned_url: "https://bucket.s3....?X-Amz-...", public_url: "..." }
+  const putUrl: string | undefined =
+    presignData.presigned_url || presignData.presignedUrl || presignData.put_url || presignData.putUrl;
+
+  if (!putUrl) {
+    throw new Error('Presign response missing PUT url or POST {url, fields}');
+  }
+
+  const fileResp = await fetch(localUri);
+  const blob = await fileResp.blob();
+
+  const putResp = await fetch(putUrl, {
+    method: 'PUT',
+    headers: { 'Content-Type': contentType },
+    body: blob,
   });
 
-  const handleSave = () => {
-    Alert.alert('Profile Updated', 'Your profile has been saved.');
-    router.back();
-  };
+  if (!putResp.ok) {
+    const text = await putResp.text().catch(() => '');
+    throw new Error(`S3 PUT failed: ${putResp.status} ${text}`);
+  }
+}
 
-  const handleAvatarChange = () => {
-    Alert.alert('Change Photo', 'Implement image picker here.');
-    // Integrate ImagePicker logic here
-  };
+type ProfileResponse = {
+  name: string | null;
+  birthdate: string | null; // "YYYY-MM-DD"
+  gender: string | null;
+  phone: string | null;
+  address: string | null;
+  city: string | null;
+  state: string | null;
+  pincode: string | null;
+  country: string | null;
+  avatar_url: string | null;
+  email: string;
+};
+
+export default function EditProfile() {
+  const { t } = useTranslation();
+  const router = useRouter();
+
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [localAvatarUri, setLocalAvatarUri] = useState<string | null>(null);
+
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [birthdate, setBirthdate] = useState('');
+  const [gender, setGender] = useState('');
+  const [email, setEmail] = useState('');
+
+  const [phone, setPhone] = useState('');
+  const [address, setAddress] = useState('');
+  const [city, setCity] = useState('');
+  const [stateVal, setStateVal] = useState('');
+  const [pincode, setPincode] = useState('');
+  const [country, setCountry] = useState('India');
+
+  const fullName = useMemo(() => {
+    const n = `${firstName} ${lastName}`.trim();
+    return n.length ? n : '';
+  }, [firstName, lastName]);
+
+  const loadProfile = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await api.get<ProfileResponse>('/v1/profile');
+      const p = res.data;
+
+      setAvatarUrl(p.avatar_url);
+      setLocalAvatarUri(null);
+      setEmail(p.email || '');
+
+      const name = (p.name || '').trim();
+      if (name) {
+        const parts = name.split(' ');
+        setFirstName(parts[0] ?? '');
+        setLastName(parts.slice(1).join(' ') ?? '');
+      } else {
+        setFirstName('');
+        setLastName('');
+      }
+
+      setBirthdate(p.birthdate ?? '');
+      setGender(p.gender ?? '');
+      setPhone(p.phone ?? '');
+      setAddress(p.address ?? '');
+      setCity(p.city ?? '');
+      setStateVal(p.state ?? '');
+      setPincode(p.pincode ?? '');
+      setCountry(p.country ?? 'India');
+    } catch (e: any) {
+      Alert.alert(t('common.error'), e?.message ?? 'Failed to load profile');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadProfile();
+  }, [loadProfile]);
+
+  const pickAvatar = useCallback(async () => {
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert(t('settings.edit_profile.permission_needed_title'), t('settings.edit_profile.permission_needed_msg'));
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        quality: 0.9,
+      });
+
+      if (result.canceled) return;
+
+      const uri = result.assets?.[0]?.uri;
+      if (!uri) return;
+
+      setLocalAvatarUri(uri);
+    } catch (e: any) {
+      Alert.alert(t('common.error'), e?.message ?? 'Failed to pick image');
+    }
+  }, []);
+
+  const saveProfile = useCallback(async () => {
+    setSaving(true);
+
+    // We'll try upload, but DON'T block saving other fields if upload fails.
+    let finalAvatarUrl = avatarUrl;
+
+    try {
+      if (localAvatarUri) {
+        const lower = localAvatarUri.toLowerCase();
+        const contentType =
+          lower.endsWith('.png') ? 'image/png' :
+          lower.endsWith('.jpg') || lower.endsWith('.jpeg') ? 'image/jpeg' :
+          'image/jpeg';
+
+        const presignResp = await api.post('/v1/uploads/presign', {
+          content_type: contentType,
+          prefix: 'avatars/',
+        });
+
+        const data = presignResp.data || {};
+
+        // Your API might use one of these keys
+        const publicUrl: string | undefined =
+          data.public_url || data.publicUrl || data.file_url || data.fileUrl;
+
+        await uploadWithPresign(data, localAvatarUri, contentType);
+
+        if (!publicUrl) {
+          // Upload succeeded but we don't know the public URL -> can't save avatar_url
+          // You can adjust backend to always return public_url.
+          throw new Error('Upload succeeded but presign response missing public_url');
+        }
+
+        finalAvatarUrl = publicUrl;
+      }
+    } catch (uploadErr: any) {
+      // ✅ Allow saving other profile fields even if avatar upload failed
+      Alert.alert(t('settings.edit_profile.avatar_upload_failed'), uploadErr?.message ?? 'Failed to upload avatar');
+    }
+
+    try {
+      await api.put('/v1/profile', {
+        name: fullName || null,
+        birthdate: birthdate || null, // must be YYYY-MM-DD for date.fromisoformat
+        gender: gender || null,
+        phone: phone || null,
+        address: address || null,
+        city: city || null,
+        state: stateVal || null,
+        pincode: pincode || null,
+        country: country || null,
+        avatar_url: finalAvatarUrl || null,
+      });
+
+      setAvatarUrl(finalAvatarUrl ?? null);
+      setLocalAvatarUri(null);
+
+      Alert.alert(t('settings.edit_profile.saved_title'), t('settings.edit_profile.saved_msg'));
+      router.back();
+    } catch (e: any) {
+      Alert.alert(t('settings.edit_profile.save_failed_title'), e?.message ?? 'Failed to save profile');
+    } finally {
+      setSaving(false);
+    }
+  }, [
+    avatarUrl,
+    localAvatarUri,
+    fullName,
+    birthdate,
+    gender,
+    phone,
+    address,
+    city,
+    stateVal,
+    pincode,
+    country,
+    router,
+  ]);
+
+  const shownAvatar = localAvatarUri || avatarUrl;
 
   return (
-    <SafeAreaView style={styles.container}>
+    <View style={styles.container}>
       <Stack.Screen
         options={{
-          headerShown: false, // Hide the default header completely
+          headerShown: true,
+          title: 'Edit Profile',
+          headerLeft: () => (
+            <TouchableOpacity onPress={() => router.back()} style={styles.headerBtn}>
+              <Text style={styles.headerBtnText}>{'‹'}</Text>
+            </TouchableOpacity>
+          ),
+          headerRight: () => (
+            <TouchableOpacity onPress={saveProfile} disabled={saving} style={styles.headerRightBtn}>
+              <Text style={[styles.headerRightText, saving && { opacity: 0.5 }]}>
+                {saving ? 'Saving…' : 'Save'}
+              </Text>
+            </TouchableOpacity>
+          ),
         }}
       />
-      
-      {/* Custom Header */}
-      <View style={styles.customHeader}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-          <ArrowLeft size={24} color="#111827" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Edit Profile</Text>
-        <TouchableOpacity onPress={handleSave}>
-          <Text style={styles.saveButton}>Save</Text>
-        </TouchableOpacity>
-      </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        {/* Profile Photo */}
-        <View style={styles.avatarSection}>
-          <View style={styles.avatarContainer}>
-            <Image source={{ uri: formData.avatar }} style={styles.avatarImage} />
-            <TouchableOpacity style={styles.cameraButton} onPress={handleAvatarChange}>
-              <Camera size={16} color="white" />
+      {loading ? (
+        <View style={styles.center}>
+          <ActivityIndicator />
+        </View>
+      ) : (
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+          <View style={styles.avatarWrap}>
+            <View style={styles.avatarCircle}>
+              {shownAvatar ? (
+                <Image source={{ uri: shownAvatar }} style={styles.avatarImg} />
+              ) : (
+                <View style={styles.avatarPlaceholder}>
+                  <Text style={styles.avatarPlaceholderText}>
+                    {(firstName?.[0] || 'U').toUpperCase()}
+                  </Text>
+                </View>
+              )}
+            </View>
+
+            <TouchableOpacity onPress={pickAvatar} style={styles.changePhotoBtn}>
+              <Text style={styles.changePhotoText}>{t('settings.edit_profile.change_photo')}</Text>
             </TouchableOpacity>
           </View>
-          <TouchableOpacity style={styles.changePhotoButton} onPress={handleAvatarChange}>
-            <Text style={styles.changePhotoButtonText}>Change photo</Text>
-          </TouchableOpacity>
-        </View>
 
-        {/* Personal Information */}
-        <View style={styles.section}>
-          <View style={styles.nameRow}>
-            <View style={styles.inputGroupHalf}>
-              <Text style={styles.label}>First name</Text>
-              <TextInput
-                style={styles.input}
-                value={formData.firstName}
-                onChangeText={(text) => setFormData({ ...formData, firstName: text })}
-              />
+          <Text style={styles.sectionTitle}>{t('settings.edit_profile.personal_details')}</Text>
+
+          <View style={styles.row}>
+            <View style={styles.half}>
+              <Text style={styles.label}>{t('settings.edit_profile.first_name')}</Text>
+              <TextInput value={firstName} onChangeText={setFirstName} style={styles.input} />
             </View>
-            <View style={styles.inputGroupHalf}>
-              <Text style={styles.label}>Last name</Text>
-              <TextInput
-                style={styles.input}
-                value={formData.lastName}
-                onChangeText={(text) => setFormData({ ...formData, lastName: text })}
-              />
+            <View style={styles.half}>
+              <Text style={styles.label}>{t('settings.edit_profile.last_name')}</Text>
+              <TextInput value={lastName} onChangeText={setLastName} style={styles.input} />
             </View>
           </View>
 
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>Bio (optional)</Text>
-            <TextInput
-              style={[styles.input, styles.textarea]}
-              placeholder="Tell us about yourself..."
-              value={formData.bio}
-              onChangeText={(text) => setFormData({ ...formData, bio: text })}
-              multiline
-              maxLength={200}
-            />
-            <Text style={styles.charCount}>{formData.bio.length}/200 characters</Text>
-          </View>
-        </View>
+          <Text style={styles.label}>{t('settings.edit_profile.dob')}</Text>
+          <TextInput
+            value={birthdate}
+            onChangeText={setBirthdate}
+            placeholder={t('settings.date_formats.ymd_label')}
+            style={styles.input}
+          />
 
-        {/* Contact Information */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Contact Information</Text>
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>Email address</Text>
-            <View style={styles.inputIconContainer}>
-              <Mail size={18} color="#6B7280" style={styles.inputIcon} />
-              <TextInput
-                style={[styles.input, styles.inputWithIcon]}
-                value={formData.email}
-                onChangeText={(text) => setFormData({ ...formData, email: text })}
-                keyboardType="email-address"
-                autoCapitalize="none"
-              />
-            </View>
-            <Text style={styles.inputHint}>We'll send booking confirmations here</Text>
-          </View>
+          <Text style={styles.label}>{t('settings.edit_profile.gender')}</Text>
+          <TextInput
+            value={gender}
+            onChangeText={setGender}
+            placeholder={t('settings.edit_profile.gender_hint')}
+            style={styles.input}
+          />
 
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>Phone number</Text>
-            <View style={styles.inputIconContainer}>
-              <Phone size={18} color="#6B7280" style={styles.inputIcon} />
-              <TextInput
-                style={[styles.input, styles.inputWithIcon]}
-                value={formData.phone}
-                onChangeText={(text) => setFormData({ ...formData, phone: text })}
-                keyboardType="phone-pad"
-              />
-            </View>
-            <Text style={styles.inputHint}>Used for OTP and notifications</Text>
+          <Text style={styles.sectionTitle}>{t('settings.edit_profile.contact_info')}</Text>
+
+          <Text style={styles.label}>{t('settings.edit_profile.email_address')}</Text>
+          <View style={styles.readonlyInput}>
+            <Text style={styles.readonlyText}>{email}</Text>
           </View>
-        </View>
-      </ScrollView>
-    </SafeAreaView>
+          <Text style={styles.helperText}>{t('settings.edit_profile.email_readonly_note')}</Text>
+
+          <Text style={styles.label}>{t('settings.edit_profile.phone_number')}</Text>
+          <TextInput value={phone} onChangeText={setPhone} style={styles.input} placeholder={t('settings.edit_profile.phone_hint')} />
+
+          <Text style={styles.sectionTitle}>{t('settings.edit_profile.address')}</Text>
+
+          <Text style={styles.label}>{t('settings.edit_profile.street_address')}</Text>
+          <TextInput value={address} onChangeText={setAddress} style={styles.input} />
+
+          <Text style={styles.label}>{t('settings.edit_profile.city')}</Text>
+          <TextInput value={city} onChangeText={setCity} style={styles.input} />
+
+          <Text style={styles.label}>{t('settings.edit_profile.state')}</Text>
+          <TextInput value={stateVal} onChangeText={setStateVal} style={styles.input} />
+
+          <Text style={styles.label}>{t('settings.edit_profile.pincode')}</Text>
+          <TextInput value={pincode} onChangeText={setPincode} style={styles.input} keyboardType="number-pad" />
+
+          <Text style={styles.label}>{t('settings.edit_profile.country')}</Text>
+          <TextInput value={country} onChangeText={setCountry} style={styles.input} />
+
+          <View style={{ height: 24 }} />
+        </ScrollView>
+      )}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFFFFF' },
-  customHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+  container: { flex: 1, backgroundColor: '#F3F4F6' },
+  content: { padding: 16, paddingBottom: 40 },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+
+  headerBtn: { paddingHorizontal: 10, paddingVertical: 6 },
+  headerBtnText: { fontSize: 24, color: '#111827' },
+  headerRightBtn: { paddingHorizontal: 12, paddingVertical: 6 },
+  headerRightText: { fontSize: 16, fontWeight: '600', color: '#2563EB' },
+
+  avatarWrap: { alignItems: 'center', paddingVertical: 16 },
+  avatarCircle: {
+    width: 84,
+    height: 84,
+    borderRadius: 42,
+    overflow: 'hidden',
+    backgroundColor: '#E5E7EB',
+  },
+  avatarImg: { width: '100%', height: '100%' },
+  avatarPlaceholder: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  avatarPlaceholderText: { fontSize: 28, fontWeight: '700', color: '#374151' },
+
+  changePhotoBtn: {
+    marginTop: 10,
     paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
-    backgroundColor: '#FFFFFF',
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    backgroundColor: '#F9FAFB',
   },
-  backButton: {
-    padding: 4,
-    width: 60, // Fixed width to balance the layout
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#111827',
-    flex: 1,
-    textAlign: 'center',
-  },
-  saveButton: { 
-    color: '#007AFF', 
-    fontSize: 16, 
-    fontWeight: '600',
-    width: 60, // Fixed width to balance the layout
-    textAlign: 'right',
-  },
-  scrollContent: { padding: 16, paddingBottom: 40 },
-  avatarSection: { alignItems: 'center', marginBottom: 24, gap: 12 },
-  avatarContainer: { position: 'relative' },
-  avatarImage: { width: 96, height: 96, borderRadius: 48 },
-  cameraButton: {
-    position: 'absolute', bottom: 0, right: 0, width: 32, height: 32,
-    backgroundColor: '#111827', borderRadius: 16, justifyContent: 'center',
-    alignItems: 'center', borderWidth: 2, borderColor: 'white',
-  },
-  changePhotoButton: {
-    borderColor: '#D1D5DB', borderWidth: 1, borderRadius: 8,
-    paddingHorizontal: 16, paddingVertical: 8,
-  },
-  changePhotoButtonText: { fontSize: 14, fontWeight: '500', color: '#111827' },
-  section: { marginBottom: 24, gap: 16 },
-  sectionTitle: { fontSize: 18, fontWeight: '600', marginBottom: 8 },
-  nameRow: { flexDirection: 'row', gap: 12 },
-  inputGroup: {},
-  inputGroupHalf: { flex: 1 },
-  label: { fontSize: 14, fontWeight: '500', color: '#374151', marginBottom: 6 },
+  changePhotoText: { fontSize: 14, fontWeight: '600', color: '#111827' },
+
+  sectionTitle: { marginTop: 18, marginBottom: 10, fontSize: 20, fontWeight: '800', color: '#111827' },
+  label: { marginTop: 12, marginBottom: 6, fontSize: 14, fontWeight: '600', color: '#374151' },
+
+  row: { flexDirection: 'row', gap: 12 },
+  half: { flex: 1 },
+
   input: {
-    borderWidth: 1, borderColor: '#D1D5DB', borderRadius: 8, paddingHorizontal: 12,
-    paddingVertical: 10, fontSize: 16, backgroundColor: 'white',
+    backgroundColor: '#F9FAFB',
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: '#111827',
   },
-  textarea: { height: 80, textAlignVertical: 'top' },
-  charCount: { fontSize: 12, color: '#6B7280', marginTop: 4, textAlign: 'right' },
-  inputIconContainer: { position: 'relative', justifyContent: 'center' },
-  inputIcon: { position: 'absolute', left: 12, zIndex: 1 },
-  inputWithIcon: { paddingLeft: 40 },
-  inputHint: { fontSize: 12, color: '#6B7280', marginTop: 6 },
+
+  readonlyInput: {
+    backgroundColor: '#F3F4F6',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  readonlyText: { fontSize: 16, color: '#6B7280' },
+  helperText: { marginTop: 6, fontSize: 12, color: '#6B7280' },
 });

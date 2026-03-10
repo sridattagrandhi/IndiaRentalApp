@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 // app/settings/payments.tsx
 import { Stack, useRouter } from 'expo-router'; // Removed useLocalSearchParams as userRole is hardcoded for now
 import { ArrowLeft, CheckCircle, CreditCard, Download, FileText, Landmark, Plus, Smartphone, Trash2, Wallet } from 'lucide-react-native';
@@ -25,21 +26,22 @@ const mockReceipts: Receipt[] = [
 
 // --- Guest Payment Settings Component ---
 function GuestPaymentSettings({ showAddPaymentModal }: { showAddPaymentModal: () => void }) {
+  const { t } = useTranslation();
   const [paymentMethods, setPaymentMethods] = useState(mockPaymentMethods);
 
   const handleRemovePayment = (id: string) => {
-    Alert.alert('Remove Method?', 'Are you sure?', [
+    Alert.alert(t('settings.payments.remove_method_title'), 'Are you sure?', [
       { text: 'Cancel', style: 'cancel'},
       { text: 'Remove', style: 'destructive', onPress: () => {
           setPaymentMethods(prev => prev.filter(pm => pm.id !== id));
-          Alert.alert('Removed');
+          Alert.alert(t('settings.payments.removed_title'));
         }}
     ]);
   };
 
   const handleSetDefault = (id: string) => {
     setPaymentMethods(prev => prev.map(pm => ({ ...pm, isDefault: pm.id === id })));
-    Alert.alert('Default Updated');
+    Alert.alert(t('settings.payments.default_updated_title'));
   };
 
   const getPaymentIcon = (type: string) => {
@@ -55,7 +57,7 @@ function GuestPaymentSettings({ showAddPaymentModal }: { showAddPaymentModal: ()
     <View style={styles.tabContent}>
       <TouchableOpacity style={styles.addButton} onPress={showAddPaymentModal}>
         <Plus size={16} color="#111827" />
-        <Text style={styles.addButtonText}>Add payment method</Text>
+        <Text style={styles.addButtonText}>{t('settings.payments.add_payment_method')}</Text>
       </TouchableOpacity>
       {paymentMethods.map((method) => (
         <View key={method.id} style={styles.card}>
@@ -65,14 +67,14 @@ function GuestPaymentSettings({ showAddPaymentModal }: { showAddPaymentModal: ()
               <View style={styles.paymentMethodNameRow}>
                 <Text style={styles.paymentMethodName}>{method.name}</Text>
                 {method.isDefault && (
-                  <View style={styles.defaultBadge}><Text style={styles.defaultBadgeText}>Default</Text></View>
+                  <View style={styles.defaultBadge}><Text style={styles.defaultBadgeText}>{t('settings_pages.payments.default')}</Text></View>
                 )}
               </View>
               <Text style={styles.paymentMethodDetails}>{method.details}</Text>
               <View style={styles.paymentActions}>
                 {!method.isDefault && (
                   <TouchableOpacity style={styles.actionButton} onPress={() => handleSetDefault(method.id)}>
-                    <Text style={styles.actionButtonText}>Set as default</Text>
+                    <Text style={styles.actionButtonText}>{t('settings.payments.set_as_default')}</Text>
                   </TouchableOpacity>
                 )}
                 <TouchableOpacity style={[styles.actionButton, styles.removeButton]} onPress={() => handleRemovePayment(method.id)}>
@@ -89,7 +91,8 @@ function GuestPaymentSettings({ showAddPaymentModal }: { showAddPaymentModal: ()
 
 // --- Guest Receipts Component ---
 function GuestReceipts() {
-  const handleDownloadReceipt = (code: string) => Alert.alert('Download Receipt', `Downloading receipt ${code}...`);
+  const { t } = useTranslation();
+  const handleDownloadReceipt = (code: string) => Alert.alert(t('settings.payments.download_receipt_title'), `Downloading receipt ${code}...`);
 
   return (
     <View style={styles.tabContent}>
@@ -106,24 +109,24 @@ function GuestReceipts() {
           </View>
           <View style={styles.receiptDetails}>
             <View>
-              <Text style={styles.receiptLabel}>Booking code</Text>
+              <Text style={styles.receiptLabel}>{t('settings.payments.booking_code')}</Text>
               <Text style={styles.receiptCode}>{receipt.bookingCode}</Text>
             </View>
             <View style={{ alignItems: 'flex-end' }}>
-              <Text style={styles.receiptLabel}>Amount</Text>
+              <Text style={styles.receiptLabel}>{t('settings.payments.amount')}</Text>
               <Text style={styles.receiptAmount}>₹{receipt.amount.toLocaleString('en-IN')}</Text>
             </View>
           </View>
           <View style={styles.divider} />
           <TouchableOpacity style={styles.downloadButton} onPress={() => handleDownloadReceipt(receipt.bookingCode)}>
             <Download size={16} color="#111827" />
-            <Text style={styles.downloadButtonText}>Download receipt</Text>
+            <Text style={styles.downloadButtonText}>{t('settings.payments.download_receipt_button')}</Text>
           </TouchableOpacity>
         </View>
       ))}
       {mockReceipts.length === 0 && (
         <View style={[styles.card, { alignItems: 'center', paddingVertical: 30 }]}>
-          <Text style={{ color: '#6B7280' }}>No receipts found.</Text>
+          <Text style={{ color: '#6B7280' }}>{t('settings.payments.no_receipts')}</Text>
         </View>
       )}
     </View>
@@ -132,6 +135,7 @@ function GuestReceipts() {
 
 // --- Host Payout Settings Component ---
 function HostPayoutSettings({ showAddBankModal }: { showAddBankModal: () => void }) {
+  const { t } = useTranslation();
   const [bankVerified, setBankVerified] = useState(false); // Example state
 
   return (
@@ -141,24 +145,24 @@ function HostPayoutSettings({ showAddBankModal }: { showAddBankModal: () => void
         <View style={styles.payoutHeader}>
           <View style={styles.cardIconBg}><Landmark size={20} color="#374151" /></View>
           <View style={styles.payoutInfo}>
-            <Text style={styles.payoutTitle}>Bank Account</Text>
+            <Text style={styles.payoutTitle}>{t('settings.payments.bank_account')}</Text>
             <Text style={styles.payoutSubtitle}>{bankVerified ? 'HDFC Bank **** 6789' : 'No bank account added'}</Text>
           </View>
           {bankVerified && (
             <View style={[styles.statusBadge, styles.statusBadgeVerified]}>
               <CheckCircle size={12} color="#065F46" />
-              <Text style={styles.statusBadgeText}>Verified</Text>
+              <Text style={styles.statusBadgeText}>{t('settings.payments.verified')}</Text>
             </View>
           )}
         </View>
         {bankVerified ? (
           <View style={styles.bankDetailsContainer}>
             <View style={styles.detailRow}><Text style={styles.detailLabel}>Account holder</Text><Text>Priya Sharma</Text></View>
-            <View style={styles.detailRow}><Text style={styles.detailLabel}>IFSC Code</Text><Text>HDFC0001234</Text></View>
+            <View style={styles.detailRow}><Text style={styles.detailLabel}>{t('settings.payments.ifsc_code')}</Text><Text>HDFC0001234</Text></View>
           </View>
         ) : (
           <TouchableOpacity style={[styles.addButton, { marginTop: 16 }]} onPress={showAddBankModal}>
-            <Plus size={16} color="#111827" /><Text style={styles.addButtonText}>Add bank account</Text>
+            <Plus size={16} color="#111827" /><Text style={styles.addButtonText}>{t('settings.payments.add_bank_account')}</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -190,6 +194,7 @@ function HostPayoutSettings({ showAddBankModal }: { showAddBankModal: () => void
 
 // --- Main Page Component ---
 export default function PaymentSettingsPage() {
+  const { t } = useTranslation();
   const router = useRouter();
   const [userRole, setUserRole] = useState<'guest' | 'host'>('guest'); // Change to 'host' to test host view
   const [activeTab, setActiveTab] = useState(userRole === 'guest' ? 'methods' : 'payouts');
@@ -204,10 +209,10 @@ export default function PaymentSettingsPage() {
 
   const handleAddBank = () => {
     if (!accountNumber || accountNumber !== confirmAccount || !ifsc || !holderName) {
-      Alert.alert('Error', 'Please fill all fields correctly.');
+      Alert.alert(t('common.error'), t('settings.payments.error_fill_fields'));
       return;
     }
-    Alert.alert('Bank Added', 'Bank account added successfully.');
+    Alert.alert(t('settings.payments.bank_added_title'), t('settings.payments.bank_added_msg'));
     setShowAddBankDialog(false);
     setAccountNumber(''); setConfirmAccount(''); setIfsc(''); setHolderName('');
   };
@@ -231,15 +236,15 @@ export default function PaymentSettingsPage() {
         {userRole === 'guest' ? (
           <>
             <TouchableOpacity style={[styles.tab, activeTab === 'methods' && styles.tabActive]} onPress={() => setActiveTab('methods')}>
-              <Text style={[styles.tabText, activeTab === 'methods' && styles.tabTextActive]}>Payment Methods</Text>
+              <Text style={[styles.tabText, activeTab === 'methods' && styles.tabTextActive]}>{t('settings.payments.tab_payment_methods')}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={[styles.tab, activeTab === 'receipts' && styles.tabActive]} onPress={() => setActiveTab('receipts')}>
-              <Text style={[styles.tabText, activeTab === 'receipts' && styles.tabTextActive]}>Receipts</Text>
+              <Text style={[styles.tabText, activeTab === 'receipts' && styles.tabTextActive]}>{t('settings.payments.tab_receipts')}</Text>
             </TouchableOpacity>
           </>
         ) : (
           <TouchableOpacity style={[styles.tab, styles.tabActive]} onPress={() => setActiveTab('payouts')}>
-            <Text style={[styles.tabText, styles.tabTextActive]}>Payout Settings</Text>
+            <Text style={[styles.tabText, styles.tabTextActive]}>{t('settings.payments.tab_payout_settings')}</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -254,18 +259,18 @@ export default function PaymentSettingsPage() {
       <Modal visible={showAddPaymentDialog} transparent animationType="fade" onRequestClose={() => setShowAddPaymentDialog(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Add Payment Method</Text>
+            <Text style={styles.modalTitle}>{t('settings.payments.add_payment_method_title')}</Text>
             <TouchableOpacity style={styles.modalOption} onPress={() => Alert.alert('Add UPI', 'Implement UPI addition flow')}>
-              <Smartphone size={20} color="#374151" /><Text style={styles.modalOptionText}>Add UPI ID</Text>
+              <Smartphone size={20} color="#374151" /><Text style={styles.modalOptionText}>{t('settings.payments.add_upi_id')}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.modalOption} onPress={() => Alert.alert('Add Card', 'Implement Card addition flow')}>
-              <CreditCard size={20} color="#374151" /><Text style={styles.modalOptionText}>Add Credit/Debit Card</Text>
+              <CreditCard size={20} color="#374151" /><Text style={styles.modalOptionText}>{t('settings.payments.add_card')}</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.modalOption} onPress={() => Alert.alert('Add Wallet', 'Implement Wallet addition flow')}>
-              <Wallet size={20} color="#374151" /><Text style={styles.modalOptionText}>Add Wallet</Text>
+            <TouchableOpacity style={styles.modalOption} onPress={() => Alert.alert(t('settings.payments.add_wallet'), 'Implement Wallet addition flow')}>
+              <Wallet size={20} color="#374151" /><Text style={styles.modalOptionText}>{t('settings.payments.add_wallet')}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={[styles.modalButtonSecondary, { marginTop: 16 }]} onPress={() => setShowAddPaymentDialog(false)}>
-              <Text style={styles.modalButtonTextSecondary}>Cancel</Text>
+              <Text style={styles.modalButtonTextSecondary}>{t('common.cancel')}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -275,18 +280,18 @@ export default function PaymentSettingsPage() {
       <Modal visible={showAddBankDialog} transparent animationType="fade" onRequestClose={() => setShowAddBankDialog(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Add Bank Account</Text>
-            <Text style={styles.modalDescription}>Enter details for payouts</Text>
-            <TextInput style={styles.input} placeholder="Account Number" keyboardType="number-pad" value={accountNumber} onChangeText={setAccountNumber} />
-            <TextInput style={styles.input} placeholder="Confirm Account Number" keyboardType="number-pad" value={confirmAccount} onChangeText={setConfirmAccount} />
-            <TextInput style={styles.input} placeholder="IFSC Code" autoCapitalize="characters" value={ifsc} onChangeText={setIfsc} />
-            <TextInput style={styles.input} placeholder="Account Holder Name" value={holderName} onChangeText={setHolderName} />
+            <Text style={styles.modalTitle}>{t('settings.payments.add_bank_account_title')}</Text>
+            <Text style={styles.modalDescription}>{t('settings.payments.add_bank_account_desc')}</Text>
+            <TextInput style={styles.input} placeholder={t('settings.payments.account_number')} keyboardType="number-pad" value={accountNumber} onChangeText={setAccountNumber} />
+            <TextInput style={styles.input} placeholder={t('settings.payments.confirm_account_number')} keyboardType="number-pad" value={confirmAccount} onChangeText={setConfirmAccount} />
+            <TextInput style={styles.input} placeholder={t('settings.payments.ifsc_code')} autoCapitalize="characters" value={ifsc} onChangeText={setIfsc} />
+            <TextInput style={styles.input} placeholder={t('settings.payments.account_holder_name')} value={holderName} onChangeText={setHolderName} />
             <View style={styles.modalActions}>
               <TouchableOpacity style={styles.modalButtonSecondary} onPress={() => setShowAddBankDialog(false)}>
-                <Text style={styles.modalButtonTextSecondary}>Cancel</Text>
+                <Text style={styles.modalButtonTextSecondary}>{t('common.cancel')}</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.modalButtonPrimary} onPress={handleAddBank}>
-                <Text style={styles.modalButtonTextPrimary}>Add Account</Text>
+                <Text style={styles.modalButtonTextPrimary}>{t('settings.payments.add_account')}</Text>
               </TouchableOpacity>
             </View>
           </View>

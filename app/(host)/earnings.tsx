@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 // app/(host)/earnings.tsx
 import { useRouter } from 'expo-router';
 import { DollarSign, Download, Landmark, TrendingUp } from 'lucide-react-native';
@@ -20,6 +21,7 @@ const monthlyEarnings = [
 ];
 
 export default function HostEarningsScreen() {
+  const { t } = useTranslation();
   const router = useRouter();
   const nextPayout = 45600;
   const nextPayoutDate = new Date('2025-11-05');
@@ -27,7 +29,7 @@ export default function HostEarningsScreen() {
   const pendingAmount = mockTransactions.filter(t => t.status === 'pending').reduce((sum, t) => sum + t.amount, 0);
   const maxEarning = Math.max(...monthlyEarnings.map(e => e.amount), 1); // Avoid division by zero
 
-  const handleDownloadStatement = () => Alert.alert('Download', 'Downloading statement...');
+  const handleDownloadStatement = () => Alert.alert(t('host.earnings.download'), t('host.earnings.downloading_statement'));
   const handleChangeBankAccount = () => router.push('/settings/payments'); // Navigate to payment settings
 
   return (
@@ -37,7 +39,7 @@ export default function HostEarningsScreen() {
          <View style={styles.headerPlaceholder} />{/* Left Placeholder */}
          <View style={styles.headerTitleContainer}>
              <Text style={styles.headerTitle}>Earnings</Text>
-             <Text style={styles.headerSubtitle}>Track payouts and earnings</Text>
+             <Text style={styles.headerSubtitle}>{t('host.earnings.track_payouts_and_earnings')}</Text>
          </View>
          <View style={styles.headerPlaceholder} />{/* Right Placeholder */}
       </View>
@@ -58,7 +60,7 @@ export default function HostEarningsScreen() {
                 <View style={styles.summaryIconBg}><TrendingUp size={20} color="#16A34A" /></View>
             </View>
             <Text style={styles.summaryValue}>₹{lifetimeEarnings.toLocaleString('en-IN')}</Text>
-            <Text style={styles.summaryTitle}>Lifetime earnings</Text>
+            <Text style={styles.summaryTitle}>{t('host.earnings.lifetime_earnings')}</Text>
           </View>
         </View>
 
@@ -66,7 +68,7 @@ export default function HostEarningsScreen() {
         {pendingAmount > 0 && (
           <View style={styles.pendingCard}>
             <View>
-              <Text style={styles.pendingTitle}>Pending</Text>
+              <Text style={styles.pendingTitle}>{t('host.earnings.pending')}</Text>
               <Text style={styles.pendingValue}>₹{pendingAmount.toLocaleString('en-IN')}</Text>
             </View>
              <View style={styles.summaryBadge}>
@@ -77,7 +79,7 @@ export default function HostEarningsScreen() {
 
         {/* Monthly Earnings Chart */}
         <View style={styles.card}>
-           <Text style={styles.sectionTitle}>Monthly Earnings</Text>
+           <Text style={styles.sectionTitle}>{t('host.earnings.monthly_earnings')}</Text>
            <View style={styles.chartContainer}>
               {monthlyEarnings.map((data) => (
                 <View key={data.month} style={styles.barItem}>
@@ -95,7 +97,7 @@ export default function HostEarningsScreen() {
 
         {/* Recent Transactions */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Recent Transactions</Text>
+          <Text style={styles.sectionTitle}>{t('host.earnings.recent_transactions')}</Text>
           {mockTransactions.map((t) => (
             <View key={t.id} style={styles.card}>
               <View style={styles.txHeader}>
@@ -122,13 +124,13 @@ export default function HostEarningsScreen() {
            <View style={styles.bankHeader}>
                 <View style={styles.summaryIconBg}><Landmark size={20} color="#111827"/></View>
                 <View style={styles.bankInfo}>
-                    <Text style={styles.bankTitle}>Bank Account</Text>
+                    <Text style={styles.bankTitle}>{t('settings.payments.bank_account')}</Text>
                     <Text style={styles.bankDetails}>HDFC Bank **** 6789</Text>
                 </View>
-                <View style={styles.verifiedBadge}><Text style={styles.verifiedText}>Verified</Text></View>
+                <View style={styles.verifiedBadge}><Text style={styles.verifiedText}>{t('settings.payments.verified')}</Text></View>
            </View>
            <TouchableOpacity style={styles.changeBankButton} onPress={handleChangeBankAccount}>
-             <Text style={styles.changeBankText}>Change bank account</Text>
+             <Text style={styles.changeBankText}>{t('host.earnings.change_bank_account')}</Text>
            </TouchableOpacity>
         </View>
 

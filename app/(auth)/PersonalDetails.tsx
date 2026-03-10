@@ -1,7 +1,10 @@
+import { useTranslation } from 'react-i18next';
 // app/(auth)/PersonalDetails.tsx
+import { apiPut } from '@/services/api';
 import { FontAwesome } from '@expo/vector-icons';
 import { format, isValid, parse } from 'date-fns';
 import { router } from 'expo-router';
+import * as SecureStore from 'expo-secure-store';
 import React, { useCallback, useMemo, useState } from 'react';
 import {
   Alert,
@@ -19,6 +22,9 @@ import { MaskedTextInput } from 'react-native-mask-text';
 import DateTimePickerModal from 'react-native-modal-datetime-picker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+// 🔐 Cognito helpers
+import { updateAttributes } from '@/services/auth';
+
 // -----------------------------
 // Dropdown options
 // -----------------------------
@@ -27,6 +33,12 @@ const genderItems = [
   { label: 'Female', value: 'female' },
   { label: 'Other', value: 'other' },
   { label: 'Prefer not to say', value: 'prefer-not-to-say' },
+];
+
+// Countries for phone
+const countryItems = [
+  { label: 'India (+91)', value: 'IN', dial: '+91', placeholder: 'XXXXX XXXXX' },
+  { label: 'United States (+1)', value: 'US', dial: '+1', placeholder: '(555) 555-1234' },
 ];
 
 const stateItems = [
@@ -60,15 +72,52 @@ const stateItems = [
 ];
 
 // -----------------------------
+// Utils
+// -----------------------------
+const onlyDigits = (s: string) => s.replace(/\D/g, '');
+
+function toE164(raw: string, country: 'IN' | 'US') {
+  const clean = onlyDigits(raw);
+  if (raw.trim().startsWith('+')) {
+    // assume already E.164
+    return `+${onlyDigits(raw)}`;
+  }
+  if (country === 'IN') {
+    // Indian mobile numbers are typically 10 digits
+    return `+91${clean}`;
+  }
+  // US numbers: 10 digits without country code
+  return `+1${clean}`;
+}
+
+function validPhone(raw: string, country: 'IN' | 'US') {
+  const digits = onlyDigits(raw);
+  if (raw.trim().startsWith('+')) {
+    // very light E.164 check
+    return /^\+\d{8,15}$/.test(`+${onlyDigits(raw)}`);
+  }
+  // country-specific quick checks (keep forgiving)
+  if (country === 'IN') return digits.length === 10;
+  if (country === 'US') return digits.length === 10;
+  return digits.length >= 8;
+}
+
+// -----------------------------
 // Screen
 // -----------------------------
 export default function PersonalDetails() {
+  const { t } = useTranslation();
   // text fields
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
   const [address, setAddress] = useState('');
   const [city, setCity] = useState('');
   const [pincode, setPincode] = useState('');
+
+  // Country dropdown for phone
+  const [countryOpen, setCountryOpen] = useState(false);
+  const [countryValue, setCountryValue] = useState<'IN' | 'US'>('IN');
+  const [countryList, setCountryList] = useState(countryItems);
 
   // DOB: support typing + calendar modal
   const [dobText, setDobText] = useState(''); // mm/dd/yyyy
@@ -85,8 +134,9 @@ export default function PersonalDetails() {
   const [stateList, setStateList] = useState(stateItems);
 
   // make dropdowns not overlap
-  const onGenderOpen = useCallback(() => setStateOpen(false), []);
-  const onStateOpen = useCallback(() => setGenderOpen(false), []);
+  const onGenderOpen = useCallback(() => { setStateOpen(false); setCountryOpen(false); }, []);
+  const onStateOpen = useCallback(() => { setGenderOpen(false); setCountryOpen(false); }, []);
+  const onCountryOpen = useCallback(() => { setGenderOpen(false); setStateOpen(false); }, []);
 
   // dates / validation
   const today = new Date();
@@ -111,28 +161,107 @@ export default function PersonalDetails() {
     setDobText(format(date, 'MM/dd/yyyy'));
   };
 
-  const handleContinue = () => {
+  const handleContinue = async () => {
     const finalDob = dobDate || parsedDob;
 
-    if (!fullName.trim() || !finalDob || !genderValue || !phone.trim() || !address.trim() || !city.trim() || !stateValue || !pincode.trim()) {
-      Alert.alert('Missing info', 'Please fill in all required fields.');
-      return;
-    }
-    if (!dobValidAndAdult) {
-      Alert.alert('Invalid DOB', 'Enter a valid DOB (must be 18+ and not in the future).');
-      return;
-    }
-    if (!/^\+?\d[\d\s-]{8,}$/.test(phone.trim())) {
-      Alert.alert('Invalid phone', 'Enter a valid phone number (e.g. +91 XXXXX XXXXX).');
-      return;
-    }
-    if (!/^\d{6}$/.test(pincode.trim())) {
-      Alert.alert('Invalid pincode', 'Pincode must be 6 digits.');
+    // 1) For "Missing info", just check that DOB TEXT is filled
+    if (
+      !fullName.trim() ||
+      !dobText.trim() ||              // ✅ check text, not parsed Date
+      !genderValue ||
+      !phone.trim() ||
+      !address.trim() ||
+      !city.trim() ||
+      !stateValue ||
+      !pincode.trim()
+    ) {
+      Alert.alert(t('auth.personal_details.alerts.missing_info_title'), t('auth.personal_details.alerts.missing_info_message'));
       return;
     }
 
-    router.push({ pathname: '/(auth)/OTPVerification', params: { type: 'phone', value: phone } });
+    // 2) Now separately enforce that we could parse it AND user is 18+
+    if (!finalDob || !dobValidAndAdult) {
+      Alert.alert(t('auth.personal_details.alerts.invalid_dob_title'), t('auth.personal_details.alerts.invalid_dob_message')
+      );
+      return;
+    }
+
+    if (!validPhone(phone.trim(), countryValue)) {
+      Alert.alert(t('auth.personal_details.alerts.invalid_phone_title'), t('auth.personal_details.alerts.invalid_phone_message'));
+      return;
+    }
+
+    if (!/^\d{5,6}$/.test(pincode.trim())) {
+      Alert.alert(t('auth.personal_details.alerts.invalid_postal_title'), t('auth.personal_details.alerts.invalid_postal_message'));
+      return;
+    }
+
+    try {
+      const storedUsername = await SecureStore.getItemAsync('username');
+      if (!storedUsername) {
+        Alert.alert('Session expired', t('search.please_log_in_again'));
+        router.replace('/(auth)/LoginPage');
+        return;
+      }
+
+      // Normalize + persist minimal attrs to Cognito (NO SMS OTP)
+      const e164 = toE164(phone, countryValue);
+      const yyyyMMDD = format(finalDob, 'yyyy-MM-dd'); // Cognito birthdate format
+      await updateAttributes(storedUsername, {
+        name: fullName,
+        birthdate: yyyyMMDD,
+        phone_number: e164, // stored but not verified for now
+      });
+
+      const token = await SecureStore.getItemAsync('idToken');
+
+      // Store full profile locally for Profile.tsx to render
+      const userProfile = {
+        name: fullName,
+        birthdate: yyyyMMDD,
+        gender: genderValue,
+        phone: e164,
+        address,
+        city,
+        state: stateValue,
+        pincode,
+        country: countryValue,
+      };
+      await SecureStore.setItemAsync('userProfile', JSON.stringify(userProfile));
+
+      if (!token) {
+        Alert.alert('Session expired', t('search.please_log_in_again'));
+        router.replace('/(auth)/LoginPage');
+        return;
+      }
+
+      // Save profile to backend (uses EXPO_PUBLIC_API_BASE_URL + Authorization interceptor)
+      await apiPut('/v1/profile', {
+        name: fullName,
+        birthdate: yyyyMMDD,
+        gender: genderValue,
+        phone: e164,
+        address,
+        city,
+        state: stateValue,
+        pincode,
+        country: countryValue,
+      });
+
+      // Go straight to success (no phone OTP page)
+      router.push('/(auth)/SuccessPage');
+    } catch (err: any) {
+      Alert.alert(t('common.error'), err?.message ?? 'Could not save your details');
+    }
   };
+
+
+
+  // figure out a nice phone placeholder based on country
+  const phonePlaceholder = (() => {
+    const meta = countryItems.find((c) => c.value === countryValue);
+    return meta ? `${meta.dial} ${meta.placeholder}` : '+XX…';
+  })();
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#FFFFFF' }}>
@@ -149,13 +278,13 @@ export default function PersonalDetails() {
           <View style={styles.headerIcon}>
             <FontAwesome name="user-o" size={28} color="#fff" />
           </View>
-          <Text style={styles.title}>Personal Details</Text>
-          <Text style={styles.subtitle}>Please provide your personal information</Text>
+          <Text style={styles.title}>{t('settings.edit_profile.personal_details')}</Text>
+          <Text style={styles.subtitle}>{t('auth.personal_details.subtitle')}</Text>
 
           {/* Full Name */}
-          <Field label="Full Name *">
+          <Field label={t('auth.personal_details.full_name_label')}>
             <TextInput
-              placeholder="Enter your full name"
+              placeholder={t('auth.personal_details.full_name_placeholder')}
               placeholderTextColor="#9AA0A6"
               style={styles.input}
               value={fullName}
@@ -166,7 +295,7 @@ export default function PersonalDetails() {
           </Field>
 
           {/* DOB (typed + calendar) */}
-          <Field label="Date of Birth *">
+          <Field label={t('auth.personal_details.dob_label')}>
             <View style={styles.inputRow}>
               <MaskedTextInput
                 mask="99/99/9999"
@@ -175,10 +304,8 @@ export default function PersonalDetails() {
                 keyboardType="number-pad"
                 value={dobText}
                 onChangeText={setDobText}
-                // extra right padding so text doesn't go under the icon
                 style={[styles.input, { flex: 1, paddingRight: 56 }]}
               />
-              {/* full-height hit area keeps icon perfectly centered */}
               <TouchableOpacity style={styles.iconHit} onPress={() => setDateModalVisible(true)}>
                 <View style={styles.iconBtn}>
                   <FontAwesome name="calendar-o" size={20} color="#6B7280" />
@@ -196,42 +323,65 @@ export default function PersonalDetails() {
             />
           </Field>
 
-          {/* Gender - inline dropdown */}
-          <Field label="Gender *">
-            <DropDownPicker
-              open={genderOpen}
-              value={genderValue}
-              items={genderList}
-              setOpen={setGenderOpen}
-              setValue={setGenderValue}
-              setItems={setGenderList}
-              placeholder="Select gender"
-              listMode="SCROLLVIEW"
-              dropDownDirection="BOTTOM"
-              onOpen={onGenderOpen}
-              style={styles.dropdown}
-              dropDownContainerStyle={styles.dropdownContainer}
-              zIndex={3000}
-              zIndexInverse={1000}
-            />
+          {/* Gender */}
+          <Field label={t('auth.personal_details.gender_label')}>
+            <View style={{ zIndex: 5000, marginBottom: genderOpen ? 180 : 0 }}>
+              <DropDownPicker
+                open={genderOpen}
+                value={genderValue}
+                items={genderList}
+                setOpen={setGenderOpen}
+                setValue={setGenderValue}
+                setItems={setGenderList}
+                placeholder={t('auth.personal_details.gender_placeholder')}
+                listMode="SCROLLVIEW"
+                dropDownDirection="BOTTOM"
+                onOpen={onGenderOpen}
+                style={styles.dropdown}
+                dropDownContainerStyle={styles.dropdownContainer}
+                zIndex={5000}
+                zIndexInverse={1000}
+              />
+            </View>
           </Field>
 
-          {/* Phone */}
-          <Field label="Phone Number *">
-            <TextInput
-              placeholder="+91 XXXXX XXXXX"
-              placeholderTextColor="#9AA0A6"
-              style={styles.input}
-              value={phone}
-              onChangeText={setPhone}
-              keyboardType="phone-pad"
-            />
+          {/* Country + Phone in a row */}
+          <Field label={t('auth.personal_details.phone_label')}>
+            <View style={{ flexDirection: 'row', gap: 10 }}>
+              <View style={{ flex: 0.9 }}>
+                <DropDownPicker
+                  open={countryOpen}
+                  value={countryValue}
+                  items={countryList}
+                  setOpen={setCountryOpen}
+                  setValue={setCountryValue as any}
+                  setItems={setCountryList}
+                  placeholder={t('settings.edit_profile.country')}
+                  listMode="SCROLLVIEW"
+                  onOpen={onCountryOpen}
+                  style={styles.dropdown}
+                  dropDownContainerStyle={styles.dropdownContainer}
+                  zIndex={4000}
+                  zIndexInverse={2000}
+                />
+              </View>
+              <View style={{ flex: 1.6 }}>
+                <TextInput
+                  placeholder={phonePlaceholder}
+                  placeholderTextColor="#9AA0A6"
+                  style={styles.input}
+                  value={phone}
+                  onChangeText={setPhone}
+                  keyboardType="phone-pad"
+                />
+              </View>
+            </View>
           </Field>
 
           {/* Address */}
-          <Field label="Address *">
+          <Field label={t('auth.personal_details.address_label')}>
             <TextInput
-              placeholder="Street address"
+              placeholder={t('settings.edit_profile.street_address')}
               placeholderTextColor="#9AA0A6"
               style={styles.input}
               value={address}
@@ -240,9 +390,9 @@ export default function PersonalDetails() {
           </Field>
 
           {/* City */}
-          <Field label="City *">
+          <Field label={t('auth.personal_details.city_label')}>
             <TextInput
-              placeholder="City"
+              placeholder={t('settings.edit_profile.city')}
               placeholderTextColor="#9AA0A6"
               style={styles.input}
               value={city}
@@ -250,8 +400,8 @@ export default function PersonalDetails() {
             />
           </Field>
 
-          {/* State - inline dropdown */}
-          <Field label="State *">
+          {/* State */}
+          <Field label={t('auth.personal_details.state_label')}>
             <DropDownPicker
               open={stateOpen}
               value={stateValue}
@@ -259,7 +409,7 @@ export default function PersonalDetails() {
               setOpen={setStateOpen}
               setValue={setStateValue}
               setItems={setStateList}
-              placeholder="Select state"
+              placeholder={t('auth.personal_details.state_placeholder')}
               searchable
               searchPlaceholder="Search states"
               listMode="SCROLLVIEW"
@@ -272,21 +422,21 @@ export default function PersonalDetails() {
             />
           </Field>
 
-          {/* Pincode */}
-          <Field label="Pincode *">
+          {/* Pincode / ZIP */}
+          <Field label="PIN / ZIP *">
             <TextInput
-              placeholder="000000"
+              placeholder={countryValue === 'IN' ? '000000' : '00000'}
               placeholderTextColor="#9AA0A6"
               style={styles.input}
               value={pincode}
               onChangeText={setPincode}
               keyboardType="number-pad"
-              maxLength={6}
+              maxLength={countryValue === 'IN' ? 6 : 5}
             />
           </Field>
 
           <TouchableOpacity style={styles.button} onPress={handleContinue}>
-            <Text style={styles.buttonText}>Continue to Verification</Text>
+            <Text style={styles.buttonText}>Continue</Text>
           </TouchableOpacity>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -311,7 +461,7 @@ const styles = StyleSheet.create({
   container: {
     padding: 18,
     paddingTop: 24,
-    backgroundColor: '#FFFFFF', // white page
+    backgroundColor: '#FFFFFF',
   },
   headerIcon: {
     alignSelf: 'center',
@@ -358,17 +508,15 @@ const styles = StyleSheet.create({
     elevation: 1,
   },
   inputRow: { position: 'relative' },
-  // full-height tappable area; keeps icon perfectly centered vertically
   iconHit: {
     position: 'absolute',
     right: 10,
     top: 0,
     bottom: 0,
-    width: 56, // comfy tap target, matches input paddingRight
+    width: 56,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  // the visible rounded icon “pill”
   iconBtn: {
     width: 40,
     height: 40,
